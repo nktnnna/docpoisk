@@ -50,6 +50,20 @@ async def chat_stream(messages: list[dict]) -> AsyncIterator[str]:
                     break
 
 
+async def chat(messages: list[dict], max_tokens: int = 200) -> str:
+    """Короткий ответ целиком, без потока — для служебных запросов (переформулировать вопрос)."""
+    payload = {
+        "model": config.LLM_MODEL,
+        "messages": messages,
+        "stream": False,
+        "options": {"temperature": 0, "num_ctx": config.LLM_NUM_CTX, "num_predict": max_tokens},
+    }
+    async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+        r = await client.post(f"{config.OLLAMA_URL}/api/chat", json=payload)
+        r.raise_for_status()
+        return r.json().get("message", {}).get("content", "")
+
+
 async def status() -> dict:
     """Какие модели скачаны — чтобы интерфейс мог подсказать, если что-то не готово."""
     try:

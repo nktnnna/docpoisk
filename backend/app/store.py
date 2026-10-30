@@ -40,24 +40,42 @@ async def ensure_collection(dim: int) -> None:
         await c.create_payload_index(config.COLLECTION, "doc_id", models.PayloadSchemaType.KEYWORD)
 
 
+# Версия индексации. 2 — эмбеддинги с именем документа и разделом. Старые документы работают,
+# но ищутся хуже; интерфейс предлагает их переиндексировать.
+INDEX_VERSION = 2
+
+
+def point_id(doc_id: str, chunk: int) -> str:
+    return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_id}:{chunk}"))
+
+
 async def upsert(doc_id: str, filename: str, chunks, vectors, uploaded_at: str) -> None:
     points = [
         models.PointStruct(
-            id=str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_id}:{ch.index}")),
+            id=point_id(doc_id, ch.index),
             vector=vec,
             payload={
                 "doc_id": doc_id,
                 "filename": filename,
                 "page": ch.page,
                 "chunk": ch.index,
+                "section": ch.section,
                 "text": ch.text,
                 "uploaded_at": uploaded_at,
+                "v": INDEX_VERSION,
             },
         )
         for ch, vec in zip(chunks, vectors)
     ]
     for i in range(0, len(points), 256):
         await client().upsert(config.COLLECTION, points=points[i : i + 256], wait=True)
+    _changed()
+
+
+def _changed() -> None:
+    from . import lexical  # индекс по словам строится из этой же базы — сбрасываем его
+
+    lexical.invalidate()
 
 
 def _doc_filter(doc_ids: list[str] | None):
@@ -80,9 +98,36 @@ async def search(vector: list[float], limit: int, doc_ids: list[str] | None = No
     return [{**p.payload, "score": round(p.score, 4)} for p in res.points]
 
 
+async def get_chunks(keys: list[tuple[str, int]]) -> dict[tuple[str, int], dict]:
+    """Фрагменты по (doc_id, номер) — для соседних кусков текста и продолжения диалога."""
+    if not keys or not await client().collection_exists(config.COLLECTION):
+        return {}
+    res = await client().retrieve(config.COLLECTION, ids=[point_id(d, c) for d, c in keys], with_payload=True)
+    return {(p.payload["doc_id"], p.payload["chunk"]): p.payload for p in res}
+
+
+async def count() -> int:
+    if not await client().collection_exists(config.COLLECTION):
+        return 0
+    return (await client().count(config.COLLECTION, exact=True)).count
+
+
+async def all_chunks() -> list[dict]:
+    if not await client().collection_exists(config.COLLECTION):
+        return []
+    result, offset = [], None
+    while True:
+        points, offset = await client().scroll(
+            config.COLLECTION, limit=1000, offset=offset, with_payload=True, with_vectors=False)
+        result.extend(p.payload for p in points)
+        if offset is None:
+            return result
+
+
 async def delete_doc(doc_id: str) -> None:
     if await client().collection_exists(config.COLLECTION):
         await client().delete(config.COLLECTION, points_selector=_doc_filter([doc_id]), wait=True)
+        _changed()
 
 
 async def list_docs() -> list[dict]:
@@ -96,14 +141,15 @@ async def list_docs() -> list[dict]:
             config.COLLECTION,
             limit=1000,
             offset=offset,
-            with_payload=["doc_id", "filename", "uploaded_at"],
+            with_payload=["doc_id", "filename", "uploaded_at", "v"],
             with_vectors=False,
         )
         for p in points:
             d = docs.setdefault(
                 p.payload["doc_id"],
                 {"doc_id": p.payload["doc_id"], "filename": p.payload["filename"],
-                 "uploaded_at": p.payload.get("uploaded_at"), "chunks": 0},
+                 "uploaded_at": p.payload.get("uploaded_at"), "chunks": 0,
+                 "outdated": p.payload.get("v", 1) < INDEX_VERSION},
             )
             d["chunks"] += 1
         if offset is None:

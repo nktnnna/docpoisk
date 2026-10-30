@@ -51,6 +51,9 @@ async function refreshDocs() {
   $("#docCount").textContent = docs.length ? `(${docs.length})` : "";
   const ids = new Set(docs.map((d) => d.doc_id));
   for (const id of [...state.selected]) if (!ids.has(id)) state.selected.delete(id);
+  const outdated = docs.filter((d) => d.outdated).length;
+  $("#reindex").hidden = !outdated;
+  $("#reindex").textContent = `Обновить индекс старых документов (${outdated}) — поиск станет точнее`;
   if (!docs.length) { ul.innerHTML = `<li class="docs-empty">Пока ничего не загружено</li>`; updateScopeHint(); return; }
   ul.innerHTML = docs.map((d) => `
     <li>
@@ -126,6 +129,12 @@ dz.addEventListener("drop", (e) => uploadFiles([...e.dataTransfer.files]));
 document.addEventListener("dragover", (e) => e.preventDefault());
 document.addEventListener("drop", (e) => { e.preventDefault(); if (!dz.contains(e.target)) uploadFiles([...e.dataTransfer.files]); });
 
+$("#reindex").addEventListener("click", async () => {
+  await api(`${API.ingest}/reindex`, { method: "POST" });
+  $("#reindex").hidden = true;
+  pollJobs();
+});
+
 $("#scanInbox").addEventListener("click", async () => {
   const r = await api(`${API.ingest}/inbox/scan`, { method: "POST" });
   if (!r.queued.length) alert("Папка inbox пуста. Положите туда файлы и нажмите ещё раз.\n" + $("#scanInbox").title.replace("Проиндексировать всё из папки ", ""));
@@ -156,7 +165,7 @@ function renderSources(sources) {
   if (!sources.length) return "";
   return `<details class="sources"><summary>Источники (${sources.length})</summary>${sources.map((s) => `
     <div class="src" data-n="${s.n}">
-      <div class="src-head"><span>[${s.n}] ${esc(s.filename)}${s.page ? `, стр. ${s.page}` : ""}</span><span class="muted">${(s.score * 100).toFixed(0)}%</span></div>
+      <div class="src-head"><span>[${s.n}] ${esc(s.filename)}${s.page ? `, стр. ${esc(s.page)}` : ""}${s.section ? ` · ${esc(s.section)}` : ""}</span>${s.score != null ? `<span class="muted">${(s.score * 100).toFixed(0)}%</span>` : ""}</div>
       <div class="src-text">${esc(s.text)}</div>
     </div>`).join("")}</details>`;
 }
@@ -175,7 +184,7 @@ async function ask(question) {
   addMessage("user", esc(question));
   const node = addMessage("bot", "Ищу в документах…", "thinking");
   const bubble = node.querySelector(".bubble");
-  let answer = "", sources = [];
+  let answer = "", sources = [], query = "";
 
   try {
     const r = await fetch(`${API.chat}/ask`, {
@@ -193,13 +202,22 @@ async function ask(question) {
         const line = buf.slice(0, i); buf = buf.slice(i + 1);
         if (!line.trim()) continue;
         const ev = JSON.parse(line);
-        if (ev.type === "sources") { sources = ev.sources; bubble.textContent = sources.length ? "Нашёл фрагменты, формулирую ответ…" : ""; }
+        if (ev.type === "query") { query = ev.text; bubble.textContent = `Ищу: «${query}»…`; }
+        else if (ev.type === "sources") { sources = ev.sources; bubble.textContent = sources.length ? "Нашёл фрагменты, формулирую ответ…" : ""; }
         else if (ev.type === "token") { answer += ev.text; bubble.classList.remove("thinking"); bubble.innerHTML = renderAnswer(answer, sources.length); scrollDown(); }
         else if (ev.type === "error") throw new Error(ev.error);
       }
     }
     bubble.insertAdjacentHTML("afterend", renderSources(sources));
-    state.history.push({ role: "user", content: question }, { role: "assistant", content: answer });
+    if (query) bubble.insertAdjacentHTML("beforebegin", `<div class="query muted">Искал: «${esc(query)}»</div>`);
+    // Для следующего вопроса запоминаем, на какие фрагменты опирался ответ: так уточнения
+    // («а какой там срок?») ищутся в том же документе
+    const cited = new Set([...answer.matchAll(/\[(\d+(?:\s*,\s*\d+)*)\]/g)].flatMap((m) => m[1].split(/\s*,\s*/).map(Number)));
+    const used = sources.filter((s) => cited.has(s.n));
+    state.history.push({ role: "user", content: question }, {
+      role: "assistant", content: answer,
+      sources: (used.length ? used : sources).map((s) => ({ doc_id: s.doc_id, filename: s.filename, chunks: s.chunks })),
+    });
   } catch (e) {
     bubble.className = "bubble err";
     bubble.textContent = "Ошибка: " + e.message;

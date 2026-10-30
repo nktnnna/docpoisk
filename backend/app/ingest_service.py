@@ -14,7 +14,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, UploadFile
 
 from . import config, ollama, store
-from .chunking import chunk_pages
+from .chunking import chunk_pages, embed_text
 from .parsing import SUPPORTED, extract_pages, unsupported_reason
 
 log = logging.getLogger("ingest")
@@ -53,7 +53,7 @@ async def _index(job_id: str, filename: str, data: bytes) -> None:
     vectors: list[list[float]] = []
     step = config.EMBED_BATCH
     for i in range(0, len(chunks), step):
-        vectors.extend(await ollama.embed([c.text for c in chunks[i : i + step]]))
+        vectors.extend(await ollama.embed([embed_text(filename, c.section, c.text) for c in chunks[i : i + step]]))
         job["done"] = len(vectors)
 
     job["status"] = "saving"
@@ -140,6 +140,20 @@ async def scan_inbox():
     for path in sorted(inbox.rglob("*")):
         if path.is_file() and path.suffix.lower() in SUPPORTED:
             queued.append(_enqueue(path.name, path.read_bytes()))
+    return {"queued": queued}
+
+
+@app.post("/reindex")
+async def reindex(only_outdated: bool = True):
+    """Заново проиндексировать сохранённые копии файлов (после обновления приложения)."""
+    docs = await store.list_docs()
+    queued = []
+    for d in docs:
+        if only_outdated and not d.get("outdated"):
+            continue
+        path = Path(config.STORAGE_DIR) / d["doc_id"] / d["filename"]
+        if path.is_file():
+            queued.append(_enqueue(d["filename"], path.read_bytes()))
     return {"queued": queued}
 
 

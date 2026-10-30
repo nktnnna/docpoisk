@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from pathlib import Path
 
 SEPARATORS = ["\n\n", "\n", ". ", "; ", ", ", " ", ""]
 
@@ -17,6 +18,33 @@ class Chunk:
     text: str
     page: int | None
     index: int
+    section: str = ""   # заголовок раздела, к которому относится фрагмент («5. Ответственность сторон»)
+
+
+# Заголовки разделов в договорах и регламентах
+_HEADING = re.compile(
+    r"^(?:(?:раздел|статья|глава|часть|приложение)\s+[\dIVXLC№]+.{0,80}"   # «Статья 5. Оплата», «Приложение № 1»
+    r"|\d{1,2}\.?\s+[А-ЯЁA-Z][^.;:!?]{2,60}"                               # «5. Ответственность сторон»
+    r"|[А-ЯЁ][А-ЯЁ0-9 ,№\-–«»\"]{4,80})$",                                     # «ПРЕДМЕТ ДОГОВОРА»
+    re.IGNORECASE,
+)
+
+
+_ORG = re.compile(r"^(?:ООО|ОАО|ЗАО|ПАО|АО|ИП|ФГУП|МУП|ГУП)\b")  # «ООО «РОМАШКА»» — не заголовок
+
+
+def _headings(text: str) -> list[str]:
+    found = []
+    for line in text.split("\n"):
+        line = line.strip()
+        # у заголовка мало слов и нет точки в конце — так не путаем его с пунктом «1. Подрядчик обязуется…»
+        if 3 < len(line) <= 90 and len(line.split()) <= 8 and _HEADING.match(line) \
+                and not _ORG.match(line):
+            # регистронезависимость нужна для «Статья/СТАТЬЯ», но строка из одних заглавных — только капсом
+            if line[0].isdigit() or line.split()[0].lower() in {"раздел", "статья", "глава", "часть", "приложение"} \
+                    or line.isupper():
+                found.append(line)
+    return found
 
 
 def normalize(text: str) -> str:
@@ -68,7 +96,23 @@ def split_text(text: str, size: int, overlap: int) -> list[str]:
 
 def chunk_pages(pages: list[tuple[int | None, str]], size: int, overlap: int) -> list[Chunk]:
     result: list[Chunk] = []
+    section = ""  # раздел переходит со страницы на страницу, пока не встретится новый заголовок
     for page_no, text in pages:
         for piece in split_text(normalize(text), size, overlap):
-            result.append(Chunk(text=piece, page=page_no, index=len(result)))
+            heads = _headings(piece)
+            starts_with_head = heads and piece.lstrip().startswith(heads[0])
+            result.append(Chunk(text=piece, page=page_no, index=len(result),
+                                section=heads[0] if starts_with_head else section))
+            if heads:
+                section = heads[-1]
     return result
+
+
+def embed_text(filename: str, section: str, text: str) -> str:
+    """Что подаём в модель эмбеддингов: фрагмент вместе с документом и разделом.
+
+    Пункт «5.2. Размер составляет 0,1 % в день» сам по себе не говорит, что речь о неустойке
+    по договору подряда, — а с заголовком раздела и именем файла поиск его находит.
+    """
+    head = " / ".join(x for x in (Path(filename).stem, section) if x)
+    return f"{head}\n{text}" if head else text
