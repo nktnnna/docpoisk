@@ -161,7 +161,8 @@ async def services():
     st = await ollama.status()
     models = "" if "error" in st else " · ".join(f"{m['name']} {'✓' if m['ready'] else '✗ не скачана'}" for m in (st["llm"], st["embed"]))
     items.append({"name": "ollama", "role": "Нейросети", "ok": bool(st.get("ok")),
-                  "info": st.get("error") or models, "where": "контейнер ollama" if docker else f"программа Ollama ({config.OLLAMA_URL})"})
+                  "info": st.get("error") or models, "where": "контейнер ollama" if "//ollama:" in config.OLLAMA_URL
+                  else f"программа Ollama на компьютере ({config.OLLAMA_URL})"})
     for it in items:
         it["log"] = it["name"] if it["name"] in logs else ("desktop" if not docker and "desktop" in logs else None)
     return {"mode": "docker" if docker else "desktop", "services": items}

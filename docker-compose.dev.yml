@@ -1,9 +1,10 @@
 # Версия для разработчика: те же контейнеры, плюс
 #   - код backend/app подключён с хоста и перезагружается при изменении (uvicorn --reload);
-#   - порты каждого сервиса открыты наружу (только на 127.0.0.1) — можно обращаться к ним напрямую;
+#   - порты каждого сервиса открыты (только на 127.0.0.1) — можно обращаться к ним напрямую;
 #   - подробные логи (LOG_LEVEL=DEBUG) в ./data/logs, журнал входов в ./data/auth/audit.jsonl.
 #
-# Запуск:  bash dev.sh up      (или: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build)
+# Запуск:  bash dev.sh up      (сам проверит порты и, если на компьютере уже работает Ollama, подключится к ней)
+# Порты можно сменить: WEB_PORT, DEV_INGEST_PORT, DEV_CHAT_PORT, DEV_QDRANT_PORT, DEV_OLLAMA_PORT
 # Логи:    bash dev.sh logs [сервис]   ·   выгрузить всё одним архивом: bash dev.sh export-logs
 
 x-dev: &dev
@@ -16,6 +17,8 @@ x-dev: &dev
     - ./data/inbox:/data/inbox
     - ./data/auth:/data/auth
     - ./data/logs:/data/logs
+  extra_hosts:
+    - "host.docker.internal:host-gateway"   # доступ к Ollama, запущенной на самом компьютере
 
 services:
   web:
@@ -28,19 +31,20 @@ services:
     command: ["uvicorn", "app.ingest_api:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/srv/app",
               "--proxy-headers", "--forwarded-allow-ips", "*"]
     ports:
-      - "127.0.0.1:8001:8000"     # http://127.0.0.1:8001/docs — API индексации; /analysis/docs, /admin/docs, /auth/docs
+      - "127.0.0.1:${DEV_INGEST_PORT:-8001}:8000"     # http://127.0.0.1:8001/docs — API индексации; /analysis/docs, /admin/docs, /auth/docs
 
   chat:
     <<: *dev
     command: ["uvicorn", "app.chat_api:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/srv/app",
               "--proxy-headers", "--forwarded-allow-ips", "*"]
     ports:
-      - "127.0.0.1:8002:8000"     # http://127.0.0.1:8002/docs — API вопросов
+      - "127.0.0.1:${DEV_CHAT_PORT:-8002}:8000"     # http://127.0.0.1:8002/docs — API вопросов
 
   qdrant:
     ports:
-      - "127.0.0.1:6333:6333"     # http://127.0.0.1:6333/dashboard — панель векторной базы
+      - "127.0.0.1:${DEV_QDRANT_PORT:-6333}:6333"     # http://127.0.0.1:6333/dashboard — панель векторной базы
 
   ollama:
     ports:
-      - "127.0.0.1:11434:11434"   # нейросети напрямую: curl http://127.0.0.1:11434/api/tags
+      # 11435, а не 11434: стандартный порт обычно занят Ollama на самом компьютере (её ставит install.sh)
+      - "127.0.0.1:${DEV_OLLAMA_PORT:-11435}:11434"   # curl http://127.0.0.1:11435/api/tags
