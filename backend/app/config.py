@@ -34,7 +34,8 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434").rstrip("/")
 LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:3b")
 EMBED_MODEL = os.getenv("EMBED_MODEL", "bge-m3")
 
-# Где хранить данные. В настольном приложении — папка в домашнем каталоге пользователя.
+# Где хранить данные. В настольном приложении — папка в домашнем каталоге пользователя
+# (называется DocPoisk по старому имени приложения — чтобы при обновлении данные остались на месте).
 DATA_DIR = os.path.expanduser(os.getenv("DATA_DIR", "~/DocPoisk"))
 
 # Векторная база Qdrant. Если QDRANT_URL пуст — встроенный режим (база лежит файлами в DATA_DIR,

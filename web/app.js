@@ -1,6 +1,6 @@
-// ДокПоиск — фронтенд без сборки и зависимостей.
+// DocSearch — фронтенд без сборки и зависимостей. Анализ документов — в analysis.js.
 const $ = (s) => document.querySelector(s);
-const API = { ingest: "/api/ingest", chat: "/api/chat" };
+const API = { ingest: "/api/ingest", chat: "/api/chat", analysis: "/api/analysis" };
 
 const state = {
   history: [],          // [{role, content}] для контекста диалога
@@ -10,7 +10,32 @@ const state = {
   docs: [],             // все документы базы знаний
   openDoc: null,        // doc_id, открытый в карточке базы знаний
   canOpen: false,       // сервер умеет открыть файл в программе по умолчанию (настольное приложение)
+  graph: null,          // реквизиты и связи документов: {docs, links, types}
+  kbMode: "table",      // таблица или цепочки «договор → доп. соглашения, письма»
+  tab: "chat",
 };
+
+// ---------- тема ----------
+const svg = (body) => `<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+const THEMES = {
+  auto: [svg('<circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18z" fill="currentColor"/>'), "Тема: как в системе"],
+  light: [svg('<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>'), "Тема: светлая"],
+  dark: [svg('<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>'), "Тема: тёмная"],
+};
+function applyTheme(t) {
+  if (t === "auto") delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+  const [icon, title] = THEMES[t];
+  $("#themeToggle").innerHTML = icon; $("#themeToggle").title = title + " (нажмите, чтобы сменить)";
+  try { t === "auto" ? localStorage.removeItem("theme") : localStorage.setItem("theme", t); } catch {}
+}
+let theme = "auto";
+try { theme = localStorage.getItem("theme") || "auto"; } catch {}
+if (!THEMES[theme]) theme = "auto";
+applyTheme(theme);
+$("#themeToggle").addEventListener("click", () => {
+  const order = ["auto", "light", "dark"];
+  theme = order[(order.indexOf(theme) + 1) % 3]; applyTheme(theme);
+});
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 
@@ -30,7 +55,7 @@ async function refreshStatus() {
     state.canOpen = !!h.can_open;
     const m = h.models;
     if (!m.llm) {
-      el.innerHTML = `<b>Ollama не запущена.</b> Установите её с ollama.com (один раз) и откройте — затем перезапустите ДокПоиск.<br><span class="muted">${esc(m.error || "")}</span>`;
+      el.innerHTML = `<b>Ollama не запущена.</b> Установите её с ollama.com (один раз) и откройте — затем перезапустите DocSearch.<br><span class="muted">${esc(m.error || "")}</span>`;
       el.className = "status bad"; return false;
     }
     const parts = [m.llm, m.embed].map((x) => `${x.ready ? "✓" : "✗"} ${esc(x.name)}${!x.ready && x.pull ? ` (${esc(x.pull)})` : ""}`);
@@ -53,6 +78,7 @@ async function refreshDocs() {
   try { docs = await api(`${API.ingest}/documents`); } catch { return; }
   state.docs = docs;
   renderKb();
+  refreshGraph();
   const ul = $("#docs");
   $("#docCount").textContent = docs.length ? `(${docs.length})` : "";
   $("#kbCount").textContent = docs.length ? `(${docs.length})` : "";
@@ -104,12 +130,25 @@ const fmtDate = (iso, full = false) => !iso ? "—" : new Date(iso).toLocaleStri
   : { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
 const plural = (n, one, few, many) => { const m10 = n % 10, m100 = n % 100; return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20) ? few : many; };
 
+// Реквизиты и связи считаются дольше (нужно прочитать документы), поэтому подгружаются отдельно
+let graphBusy = false;
+async function refreshGraph() {
+  if (graphBusy) return; graphBusy = true;
+  try { state.graph = await api(`${API.analysis}/graph`); renderKb(); } catch { /* анализ недоступен — таблица работает и без него */ }
+  finally { graphBusy = false; }
+}
+const docInfo = (id) => state.graph?.docs.find((d) => d.doc_id === id);
+const parentOf = (id) => state.graph?.links.find((l) => l.from === id);
+const reqText = (m) => !m ? "" : [m.number ? `№ ${m.number}` : "", m.date ? `от ${m.date.split("-").reverse().join(".")}` : ""].filter(Boolean).join(" ");
+
 function showTab(name) {
-  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
-  $("#view-chat").hidden = name !== "chat";
-  $("#view-kb").hidden = name !== "kb";
+  state.tab = name;
+  const tabFor = name === "analysis" ? "kb" : name;
+  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tabFor));
+  for (const v of ["chat", "kb", "risks", "analysis"]) $(`#view-${v}`).hidden = v !== name;
   $("#clearChat").hidden = name !== "chat";
   if (name === "kb") refreshDocs();
+  if (name === "risks") window.renderRisksTab?.();
 }
 document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => showTab(t.dataset.tab)));
 
@@ -132,28 +171,47 @@ function renderKb() {
   fmtSel.innerHTML = `<option value="">Все форматы</option>` + formats.map((f) => `<option value="${esc(f)}">${esc(f.toUpperCase())}</option>`).join("");
   fmtSel.value = formats.includes(cur) ? cur : "";
 
+  const typeSel = $("#kbType"), curType = typeSel.value;
+  const types = [...new Set(docs.map((d) => docInfo(d.doc_id)?.type).filter(Boolean))];
+  typeSel.innerHTML = `<option value="">Все типы</option>` + types.map((t) => `<option value="${t}">${esc(state.graph.types[t])}</option>`).join("");
+  typeSel.value = types.includes(curType) ? curType : "";
+
   const needle = $("#kbFilter").value.trim().toLowerCase();
   const sort = $("#kbSort").value;
   const rows = docs
-    .filter((d) => (!needle || d.filename.toLowerCase().includes(needle)) && (!fmtSel.value || d.format === fmtSel.value))
+    .filter((d) => (!needle || d.filename.toLowerCase().includes(needle) || (docInfo(d.doc_id)?.title || "").toLowerCase().includes(needle))
+      && (!fmtSel.value || d.format === fmtSel.value) && (!typeSel.value || docInfo(d.doc_id)?.type === typeSel.value))
     .sort((a, b) => sort === "name" ? a.filename.localeCompare(b.filename, "ru")
       : sort === "size" ? (b.size || 0) - (a.size || 0)
       : sort === "chunks" ? b.chunks - a.chunks
       : sort === "date-asc" ? (a.uploaded_at || "").localeCompare(b.uploaded_at || "")
       : (b.uploaded_at || "").localeCompare(a.uploaded_at || ""));
 
-  $("#kbRows").innerHTML = rows.length ? rows.map((d) => `
+  $("#kbRows").innerHTML = rows.length ? rows.map((d) => {
+    const m = docInfo(d.doc_id), link = parentOf(d.doc_id), target = link && docInfo(link.to);
+    return `
     <tr data-id="${d.doc_id}" class="${state.openDoc === d.doc_id ? "active" : ""}">
-      <td class="name" title="${esc(d.filename)}">${esc(d.filename)}${d.outdated ? ` <span class="badge" title="Проиндексирован старой версией — переиндексируйте для точного поиска">старый индекс</span>` : ""}</td>
-      <td><span class="fmt">${esc(d.format.toUpperCase())}</span></td>
+      <td class="name" title="${esc(d.filename)}"><span class="fmt">${esc(d.format.toUpperCase())}</span> ${esc(d.filename)}${d.outdated ? ` <span class="badge" title="Проиндексирован старой версией — переиндексируйте для точного поиска">старый индекс</span>` : ""}</td>
+      <td>${m ? `<span class="type t-${m.type}">${esc(m.type_name)}</span>` : `<span class="muted">…</span>`}</td>
+      <td class="muted">${esc(reqText(m)) || "—"}</td>
+      <td class="name link-cell">${target ? `<span class="muted">${esc(link.relation)}</span> ${esc(target.title || target.filename)}` : "—"}</td>
       <td class="num">${fmtSize(d.size)}</td>
-      <td class="num">${d.pages ?? "—"}</td>
       <td class="num">${d.chunks}</td>
       <td class="date">${fmtDate(d.uploaded_at)}</td>
-    </tr>`).join("")
-    : `<tr><td colspan="6" class="kb-empty">${docs.length ? "Ничего не найдено" : "База знаний пуста. Перетащите документы в левую панель."}</td></tr>`;
+    </tr>`;
+  }).join("")
+    : `<tr><td colspan="7" class="kb-empty">${docs.length ? "Ничего не найдено" : "База знаний пуста. Перетащите документы в левую панель."}</td></tr>`;
+  $("#kbTable").hidden = state.kbMode !== "table";
+  $("#kbChains").hidden = state.kbMode !== "chains";
+  if (state.kbMode === "chains") window.renderChains?.(rows);
 }
-["input", "change"].forEach((ev) => ["#kbFilter", "#kbFormat", "#kbSort"].forEach((id) => $(id).addEventListener(ev, renderKb)));
+["input", "change"].forEach((ev) => ["#kbFilter", "#kbFormat", "#kbType", "#kbSort"].forEach((id) => $(id).addEventListener(ev, renderKb)));
+$("#kbMode").addEventListener("click", (e) => {
+  const b = e.target.closest("button[data-mode]"); if (!b) return;
+  state.kbMode = b.dataset.mode;
+  $("#kbMode").querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b));
+  renderKb();
+});
 $("#kbRows").addEventListener("click", (e) => { const tr = e.target.closest("tr[data-id]"); if (tr) openDetail(tr.dataset.id); });
 
 function closeDetail() { state.openDoc = null; $("#kbDetail").hidden = true; renderKb(); }
@@ -185,6 +243,7 @@ async function openDetail(id) {
       ${row("Индекс", d.outdated ? `<span class="warn">старой версии — переиндексируйте</span>` : "актуальный")}
       ${row("ID", `<code>${esc(d.doc_id)}</code>`)}
     </dl>
+    <div id="kbAnalysis"></div>
     ${d.sections.length ? `<details class="kb-sections"><summary>Разделы (${d.sections.length})</summary><ol>${d.sections.map((x) => `<li>${esc(x)}</li>`).join("")}</ol></details>` : ""}
     <div class="kb-chunks-head"><b>Текст документа</b><input type="search" id="kbChunkFilter" placeholder="Найти в тексте…"></div>
     <div class="kb-chunks" id="kbChunks"></div>`;
@@ -210,6 +269,7 @@ async function openDetail(id) {
     $("#kbReindex").disabled = true; $("#kbReindex").textContent = "В очереди…";
   });
   $("#kbDelete").addEventListener("click", () => deleteDoc(id, d.filename));
+  window.enhanceDetail?.(id, $("#kbAnalysis"));
 }
 
 // ---------- загрузка ----------

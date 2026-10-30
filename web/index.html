@@ -3,16 +3,21 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ДокПоиск — вопросы по документам</title>
+<title>DocSearch — вопросы по документам</title>
+<link rel="icon" type="image/png" href="icon.png">
+<script>
+  // тема до отрисовки, чтобы не мигало: сохранённый выбор или системная
+  try { const t = localStorage.getItem("theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch {}
+</script>
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
 <div class="layout">
   <aside class="sidebar" id="sidebar">
     <div class="brand">
-      <div class="logo">Д</div>
+      <img class="logo" src="icon.png" alt="">
       <div>
-        <div class="brand-name">ДокПоиск</div>
+        <div class="brand-name">DocSearch</div>
         <div class="brand-sub">локально · без интернета</div>
       </div>
     </div>
@@ -42,8 +47,10 @@
       <nav class="tabs" role="tablist">
         <button class="tab active" data-tab="chat" role="tab">Вопросы</button>
         <button class="tab" data-tab="kb" role="tab">База знаний <span id="kbCount" class="muted"></span></button>
+        <button class="tab" data-tab="risks" role="tab">Реестр рисков</button>
       </nav>
       <button class="link" id="clearChat">Новый диалог</button>
+      <button class="icon-btn" id="themeToggle" title="Тема"></button>
     </header>
 
     <section class="view" id="view-chat">
@@ -69,6 +76,7 @@
       <div class="kb-stats" id="kbStats"></div>
       <div class="kb-tools">
         <input type="search" id="kbFilter" placeholder="Поиск по названию…">
+        <select id="kbType"><option value="">Все типы</option></select>
         <select id="kbFormat"><option value="">Все форматы</option></select>
         <select id="kbSort">
           <option value="date">Сначала новые</option>
@@ -77,19 +85,44 @@
           <option value="size">По размеру</option>
           <option value="chunks">По числу фрагментов</option>
         </select>
+        <div class="seg" id="kbMode">
+          <button data-mode="table" class="active">Таблица</button>
+          <button data-mode="chains">Связи</button>
+        </div>
       </div>
       <div class="kb-body">
         <div class="kb-table-wrap">
-          <table class="kb-table">
-            <thead><tr><th>Документ</th><th>Формат</th><th class="num">Размер</th><th class="num">Стр.</th><th class="num">Фрагм.</th><th>Загружен</th></tr></thead>
+          <table class="kb-table" id="kbTable">
+            <thead><tr><th>Документ</th><th>Тип</th><th>Реквизиты</th><th>Связан с</th><th class="num">Размер</th><th class="num">Фрагм.</th><th>Загружен</th></tr></thead>
             <tbody id="kbRows"></tbody>
           </table>
+          <div class="chains" id="kbChains" hidden></div>
         </div>
         <aside class="kb-detail" id="kbDetail" hidden></aside>
       </div>
     </section>
+
+    <section class="view analysis" id="view-analysis" hidden>
+      <div class="an-head">
+        <button class="btn" id="anBack">← Назад</button>
+        <div class="an-title"><h2 id="anTitle"></h2><div class="muted" id="anSub"></div></div>
+      </div>
+      <div class="an-body" id="anBody"></div>
+    </section>
+
+    <section class="view risks-view" id="view-risks" hidden>
+      <div class="kb-tools">
+        <select id="rkLevel"><option value="">Все уровни</option><option>высокий</option><option>средний</option><option>низкий</option></select>
+        <select id="rkDoc"><option value="">Все документы</option></select>
+        <input type="search" id="rkFilter" placeholder="Поиск по тексту риска…">
+        <a class="btn" id="rkExport" href="/api/analysis/risks.xlsx" download>Выгрузить в Excel</a>
+      </div>
+      <div class="hint muted">Реестр собирается из анализов рисков. Запустить анализ: «База знаний» → документ → «Анализ рисков».</div>
+      <div class="kb-table-wrap"><table class="kb-table risk-table" id="rkTable"></table></div>
+    </section>
   </main>
 </div>
 <script src="app.js"></script>
+<script src="analysis.js"></script>
 </body>
 </html>

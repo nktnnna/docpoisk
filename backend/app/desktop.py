@@ -1,4 +1,4 @@
-"""Настольное приложение ДокПоиск.
+"""Настольное приложение DocSearch.
 
 Поднимает локальный сервер на 127.0.0.1 (наружу не виден) и открывает
 интерфейс в собственном окне приложения — браузер не нужен.
@@ -50,6 +50,25 @@ def ensure_ollama() -> None:
         time.sleep(1)
 
 
+ICON = os.path.join(os.path.dirname(__file__), "..", "..", "assets", "icon.png")
+
+
+def _mac_branding() -> None:
+    """Имя и иконка в Dock и меню: иначе macOS показывает «Python» с его значком."""
+    if sys.platform != "darwin":
+        return
+    try:
+        from AppKit import NSApplication, NSImage
+        from Foundation import NSBundle
+
+        info = NSBundle.mainBundle().infoDictionary()
+        info["CFBundleName"] = "DocSearch"
+        NSApplication.sharedApplication().setApplicationIconImage_(
+            NSImage.alloc().initWithContentsOfFile_(os.path.abspath(ICON)))
+    except Exception:  # оформление необязательно — без него приложение работает так же
+        pass
+
+
 def main() -> None:
     ensure_ollama()
     port = _free_port()
@@ -63,7 +82,7 @@ def main() -> None:
         import webbrowser
 
         webbrowser.open(url)
-        print(f"ДокПоиск работает: {url}  (Ctrl+C — выход)")
+        print(f"DocSearch работает: {url}  (Ctrl+C — выход)")
         try:
             while True:
                 time.sleep(3600)
@@ -73,7 +92,8 @@ def main() -> None:
     import webview
 
     webview.settings["ALLOW_DOWNLOADS"] = True  # кнопка «Скачать» в базе знаний
-    webview.create_window("ДокПоиск", url, width=1280, height=820, min_size=(760, 520))
+    _mac_branding()
+    webview.create_window("DocSearch", url, width=1280, height=820, min_size=(760, 520))
     webview.start()
     server.should_exit = True
 
