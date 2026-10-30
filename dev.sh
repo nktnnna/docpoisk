@@ -12,6 +12,15 @@ set -euo pipefail
 cd "$(dirname "$0")"
 DC=(docker compose -f docker-compose.yml -f docker-compose.dev.yml)
 
+if [[ "${1:-help}" != "help" ]]; then
+  command -v docker >/dev/null || { echo "Docker не установлен. Поставьте Docker Desktop: https://www.docker.com/products/docker-desktop/ и откройте его."; exit 1; }
+  docker info >/dev/null 2>&1 || { echo "Docker не запущен: откройте приложение Docker Desktop и подождите, пока кит в строке меню перестанет мигать."; exit 1; }
+fi
+need_running() {
+  "${DC[@]}" ps --status running --services 2>/dev/null | grep -qx ingest ||
+    { echo "Контейнеры не запущены. Сначала выполните: bash dev.sh up"; exit 1; }
+}
+
 case "${1:-help}" in
   up)    mkdir -p data/{files,inbox,auth,logs,exports}; "${DC[@]}" up -d --build
          echo; echo "Интерфейс: http://localhost:${WEB_PORT:-8080}   API: http://127.0.0.1:8001/docs, http://127.0.0.1:8002/docs"
@@ -27,8 +36,8 @@ case "${1:-help}" in
          tar -czf "$OUT.tar.gz" -C data/exports "logs_$STAMP" && rm -rf "$OUT"
          echo "Готово: $OUT.tar.gz" ;;
   test)  "${DC[@]}" run --rm --no-deps -e AUTH=on ingest sh -c "pip install -q pytest && python -m pytest -q tests" ;;
-  shell) "${DC[@]}" exec "${2:-ingest}" sh ;;
+  shell) need_running; "${DC[@]}" exec "${2:-ingest}" sh ;;
   admin-console)
-         "${DC[@]}" exec ingest python -m app.console ;;
+         need_running; "${DC[@]}" exec ingest python -m app.console --url http://127.0.0.1:8000 ;;
   *)     sed -n '2,11p' "$0" ;;
 esac

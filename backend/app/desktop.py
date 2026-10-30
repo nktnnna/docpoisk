@@ -99,6 +99,11 @@ def main() -> None:
     while not server.started:
         time.sleep(0.05)
     url = f"http://127.0.0.1:{port}/"
+    # адрес для консоли администратора в терминале (bash run.sh --console)
+    port_file = os.path.join(config.DATA_DIR, "app.port")
+    os.makedirs(config.DATA_DIR, exist_ok=True)
+    with open(port_file, "w") as f:
+        f.write(str(port))
 
     if "--browser" in sys.argv:  # запасной режим: открыть в браузере
         import webbrowser
@@ -117,6 +122,8 @@ def main() -> None:
     webview.create_window("DocSearch", url, js_api=SaveApi(), width=1280, height=820, min_size=(760, 520))
     webview.start()
     server.should_exit = True
+    if os.path.exists(port_file):
+        os.remove(port_file)
 
 
 if __name__ == "__main__":

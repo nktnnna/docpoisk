@@ -148,6 +148,7 @@
     <section class="view admin" id="view-admin" hidden>
       <div class="seg" id="adminMode">
         <button data-pane="console" class="active">Консоль</button>
+        <button data-pane="services">Сервисы</button>
         <button data-pane="users">Пользователи</button>
         <button data-pane="audit">Журнал</button>
         <button data-pane="logs">Логи</button>
@@ -157,8 +158,19 @@
         <div class="console" id="consoleOut"></div>
         <form class="console-in" id="consoleForm">
           <span>&gt;</span>
-          <input id="consoleInput" autocomplete="off" spellcheck="false" placeholder="help — список команд; можно написать и обычным языком">
+          <input id="consoleInput" autocomplete="off" spellcheck="false" placeholder="Введите команду и нажмите Enter: help, docs, stats… Можно обычным языком">
+          <button class="send small" type="submit">Выполнить</button>
         </form>
+        <div class="chips" id="consoleChips">
+          <button data-cmd="help">help</button><button data-cmd="docs">docs</button><button data-cmd="stats">stats</button>
+          <button data-cmd="links">links</button><button data-cmd="users">users</button><button data-cmd="audit 20">audit 20</button>
+          <button data-cmd="jobs">jobs</button><button data-cmd="config">config</button>
+        </div>
+      </div>
+
+      <div class="pane" id="pane-services" hidden>
+        <div class="hint muted" id="servicesMode"></div>
+        <div class="services" id="servicesList"></div>
       </div>
 
       <div class="pane" id="pane-users" hidden>

@@ -86,3 +86,11 @@ def test_console_and_logs(client):
     r = client.get("/api/admin/logs.zip")
     assert r.status_code == 200 and r.content[:2] == b"PK"
     assert "attachment" in r.headers["content-disposition"]
+
+
+def test_services_desktop_mode(client):
+    client.post("/api/auth/setup", json={"username": "anna", "password": "Secret-2024"})
+    r = client.get("/api/admin/services").json()
+    assert r["mode"] == "desktop"
+    assert [s["name"] for s in r["services"]] == ["web", "ingest", "chat", "qdrant", "ollama"]
+    assert all(s["where"] for s in r["services"])

@@ -8,8 +8,9 @@ window.renderAdmin = () => showPane(adminPane);
 function showPane(name) {
   adminPane = name;
   $("#adminMode").querySelectorAll("button").forEach((b) => b.classList.toggle("active", b.dataset.pane === name));
-  for (const p of ["console", "users", "audit", "logs"]) $(`#pane-${p}`).hidden = p !== name;
+  for (const p of ["console", "services", "users", "audit", "logs"]) $(`#pane-${p}`).hidden = p !== name;
   if (name === "console") { if (!$("#consoleOut").childElementCount) consolePrint("Консоль администратора DocSearch. Команды — help.", "muted"); $("#consoleInput").focus(); }
+  if (name === "services") loadServices();
   if (name === "users") loadUsers();
   if (name === "audit") loadAudit();
   if (name === "logs") loadLogs();
@@ -50,9 +51,33 @@ $("#consoleForm").addEventListener("submit", (e) => {
   if (cmd === "clear" || cmd === "cls") { $("#consoleOut").innerHTML = ""; return; }
   runConsole(cmd);
 });
+$("#consoleChips").addEventListener("click", (e) => { const b = e.target.closest("[data-cmd]"); if (b) runConsole(b.dataset.cmd); });
+$("#consoleOut").addEventListener("click", () => { if (!getSelection().toString()) $("#consoleInput").focus(); });
 $("#consoleInput").addEventListener("keydown", (e) => {
   if (e.key === "ArrowUp" && histPos > 0) { histPos--; $("#consoleInput").value = conHistory[histPos]; e.preventDefault(); }
   if (e.key === "ArrowDown") { histPos = Math.min(conHistory.length, histPos + 1); $("#consoleInput").value = conHistory[histPos] || ""; e.preventDefault(); }
+});
+
+// ---------- сервисы (контейнеры) ----------
+async function loadServices() {
+  $("#servicesList").innerHTML = `<div class="muted">Проверяю…</div>`;
+  let r;
+  try { r = await api(`${AD}/services`); } catch (e) { $("#servicesList").innerHTML = `<div class="err">${esc(errMsg(e))}</div>`; return; }
+  $("#servicesMode").textContent = r.mode === "docker"
+    ? "Docker-версия: каждая часть работает в своём контейнере. Логи каждого контейнера — во вкладке «Логи», в терминале: bash dev.sh logs <имя>."
+    : "Настольная версия: все части работают внутри одного приложения, Docker и контейнеры не нужны. Версия с отдельными контейнерами запускается командой bash dev.sh up (нужен Docker Desktop).";
+  $("#servicesList").innerHTML = r.services.map((s) => `
+    <div class="svc ${s.ok ? "" : "bad"}">
+      <div class="svc-head"><span class="dot"></span><b>${esc(s.name)}</b><span class="muted">${esc(s.role)}</span></div>
+      <div class="small">${esc(s.where)}</div>
+      <div class="small muted">${esc(s.info)}</div>
+      ${s.log ? `<button class="link small" data-log="${esc(s.log)}">лог</button>` : ""}
+    </div>`).join("");
+}
+$("#servicesList").addEventListener("click", async (e) => {
+  const b = e.target.closest("[data-log]"); if (!b) return;
+  showPane("logs");
+  setTimeout(() => { const opt = [...$("#logFile").options].find((o) => o.value === `${b.dataset.log}.log`); if (opt) { $("#logFile").value = opt.value; loadLogs(); } }, 400);
 });
 
 // ---------- пользователи ----------

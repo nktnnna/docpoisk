@@ -7,15 +7,18 @@
 from __future__ import annotations
 
 import io
+import os
 import json
 import logging
 import re
 import shlex
+import socket
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, HTTPException
+import httpx
 from fastapi.responses import Response
 from pydantic import BaseModel
 
@@ -114,6 +117,56 @@ async def delete_user(name: str):
     return {"ok": True}
 
 
+# ---------- сервисы (контейнеры) ----------
+
+@app.get("/services", dependencies=admin_only)
+async def services():
+    """Из чего состоит приложение и всё ли работает.
+
+    Настольная версия — один процесс: все части внутри приложения, контейнеров нет.
+    Docker-версия — каждая часть в своём контейнере; здесь видно, отвечает ли каждый.
+    """
+    docker = bool(config.QDRANT_URL)
+    here = socket.gethostname()
+    logs = {p.name.split(".")[0] for p in _log_files()}
+
+    async def probe(url: str) -> tuple[bool, str]:
+        try:
+            async with httpx.AsyncClient(timeout=3) as c:
+                r = await c.get(url)
+            return r.status_code in (200, 401), f"HTTP {r.status_code}"   # 401 — жив, просто требует вход
+        except httpx.HTTPError as e:
+            return False, f"не отвечает: {e.__class__.__name__}"
+
+    items = []
+    if docker:
+        ok, info = await probe(os.getenv("WEB_URL", "http://web/"))
+        items.append({"name": "web", "role": "Интерфейс (nginx)", "ok": ok, "info": info, "where": "контейнер web"})
+    else:
+        items.append({"name": "web", "role": "Интерфейс", "ok": True, "info": "окно приложения", "where": "внутри приложения"})
+    items.append({"name": "ingest", "role": "Вход, загрузка и индексация, анализ, администрирование", "ok": True,
+                  "info": "этот сервис отвечает на запрос", "where": f"контейнер ingest ({here})" if docker else "внутри приложения"})
+    if docker:
+        ok, info = await probe(os.getenv("CHAT_URL", "http://chat:8000") + "/health")
+        items.append({"name": "chat", "role": "Вопросы и ответы", "ok": ok, "info": info, "where": "контейнер chat"})
+    else:
+        items.append({"name": "chat", "role": "Вопросы и ответы", "ok": True, "info": "работает", "where": "внутри приложения"})
+    try:
+        n = await store.count()
+        items.append({"name": "qdrant", "role": "Векторная база", "ok": True, "info": f"фрагментов: {n}",
+                      "where": "контейнер qdrant" if docker else f"файлы в {config.QDRANT_PATH}"})
+    except Exception as e:
+        items.append({"name": "qdrant", "role": "Векторная база", "ok": False, "info": str(e)[:200],
+                      "where": "контейнер qdrant" if docker else config.QDRANT_PATH})
+    st = await ollama.status()
+    models = "" if "error" in st else " · ".join(f"{m['name']} {'✓' if m['ready'] else '✗ не скачана'}" for m in (st["llm"], st["embed"]))
+    items.append({"name": "ollama", "role": "Нейросети", "ok": bool(st.get("ok")),
+                  "info": st.get("error") or models, "where": "контейнер ollama" if docker else f"программа Ollama ({config.OLLAMA_URL})"})
+    for it in items:
+        it["log"] = it["name"] if it["name"] in logs else ("desktop" if not docker and "desktop" in logs else None)
+    return {"mode": "docker" if docker else "desktop", "services": items}
+
+
 # ---------- журнал и логи ----------
 
 @app.get("/audit", dependencies=admin_only)
@@ -199,6 +252,12 @@ HELP = """Команды (id документа можно сокращать д
   help                          эта справка
 
 Можно писать и обычным языком — нейросеть предложит подходящую команду."""
+
+
+def _models(st: dict) -> str:
+    if "error" in st:
+        return st["error"]
+    return ", ".join(f"{m['name']} — {'готова' if m['ready'] else 'не скачана'}" for m in (st["llm"], st["embed"]))
 
 
 class ConsoleError(Exception):
@@ -407,7 +466,7 @@ async def run_command(line: str) -> str:
         return (f"Документов: {len(docs)}, фрагментов: {sum(d['chunks'] for d in docs)}, "
                 f"устаревший индекс: {sum(1 for d in docs if d.get('outdated'))}\n"
                 f"Реестров рисков: {len(regs)}, рисков: {sum(len(r['risks']) for r in regs)}\n"
-                f"Пользователей: {len(auth.load_users())}\nМодели: {json.dumps(await ollama.status(), ensure_ascii=False)}")
+                f"Пользователей: {len(auth.load_users())}\nМодели: {_models(await ollama.status())}")
 
     if cmd == "passwd" and len(args) == 2:
         try:
