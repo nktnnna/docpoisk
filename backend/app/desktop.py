@@ -69,6 +69,28 @@ def _mac_branding() -> None:
         pass
 
 
+class SaveApi:
+    """Сохранение файлов из окна приложения через обычный диалог «Сохранить» (вызывается из web/app.js).
+
+    Встроенное окно само не умеет скачивать: без этого кнопка «Скачать» открывала бы файл
+    (или ответ с ошибкой) вместо страницы приложения.
+    """
+
+    def save_file(self, filename: str, data_b64: str) -> str:
+        import base64
+        from pathlib import Path
+
+        import webview
+
+        target = webview.windows[0].create_file_dialog(
+            webview.SAVE_DIALOG, directory=str(Path.home() / "Downloads"), save_filename=filename)
+        if not target:
+            return ""
+        path = target if isinstance(target, str) else target[0]
+        Path(path).write_bytes(base64.b64decode(data_b64))
+        return path
+
+
 def main() -> None:
     ensure_ollama()
     port = _free_port()
@@ -91,9 +113,8 @@ def main() -> None:
 
     import webview
 
-    webview.settings["ALLOW_DOWNLOADS"] = True  # кнопка «Скачать» в базе знаний
     _mac_branding()
-    webview.create_window("DocSearch", url, width=1280, height=820, min_size=(760, 520))
+    webview.create_window("DocSearch", url, js_api=SaveApi(), width=1280, height=820, min_size=(760, 520))
     webview.start()
     server.should_exit = True
 

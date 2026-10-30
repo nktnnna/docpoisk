@@ -62,3 +62,12 @@ LLM_NUM_CTX = _int("LLM_NUM_CTX", 8192)
 STORAGE_DIR = os.getenv("STORAGE_DIR", os.path.join(DATA_DIR, "files"))  # копии загруженных файлов
 INBOX_DIR = os.getenv("INBOX_DIR", os.path.join(DATA_DIR, "inbox"))       # папка для массовой загрузки
 EMBED_BATCH = _int("EMBED_BATCH", 16)
+
+# Вход по паролю. Пользователи, ключ подписи сессий и журнал входов лежат в AUTH_DIR
+# (в Docker — общая папка для контейнеров ingest и chat). AUTH=off — только для разработки.
+AUTH_DIR = os.path.expanduser(os.getenv("AUTH_DIR", os.path.join(DATA_DIR, "auth")))
+AUTH_ENABLED = os.getenv("AUTH", "on").lower() not in ("off", "0", "false", "no")
+SESSION_HOURS = _int("SESSION_HOURS", 12)
+# Логи сервисов (по файлу на сервис, с ротацией) — их можно посмотреть и выгрузить в разделе «Админ»
+LOG_DIR = os.path.expanduser(os.getenv("LOG_DIR", os.path.join(DATA_DIR, "logs")))
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()

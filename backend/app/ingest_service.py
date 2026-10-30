@@ -18,7 +18,7 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from . import config, ollama, store
+from . import auth, config, ollama, store
 from .chunking import chunk_pages, embed_text, headings
 from .parsing import SUPPORTED, extract_pages, unsupported_reason
 
@@ -26,6 +26,7 @@ log = logging.getLogger("ingest")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 app = FastAPI(title="Индексация документов")
+auth.protect(app)
 
 # Задачи индексации (в памяти: после перезапуска история очищается, сами документы остаются в базе)
 jobs: dict[str, dict] = {}
@@ -143,6 +144,8 @@ async def upload(files: list[UploadFile] = File(...)):
             rejected.append({"filename": f.filename, "error": reason})
             continue
         accepted.append(_enqueue(f.filename or "file", await f.read()))
+    if accepted:
+        auth.audit("Загрузка документов", ", ".join(j["filename"] for j in accepted))
     return {"accepted": accepted, "rejected": rejected}
 
 
@@ -155,6 +158,7 @@ async def scan_inbox():
     for path in sorted(inbox.rglob("*")):
         if path.is_file() and path.suffix.lower() in SUPPORTED:
             queued.append(_enqueue(path.name, path.read_bytes()))
+    auth.audit("Загрузка из папки inbox", f"{len(queued)} файлов")
     return {"queued": queued}
 
 
@@ -171,6 +175,8 @@ async def reindex(only_outdated: bool = True, doc_id: str | None = None):
         path = _stored_file(d)
         if path:
             queued.append(_enqueue(d["filename"], path.read_bytes()))
+    if queued:
+        auth.audit("Переиндексация", ", ".join(j["filename"] for j in queued)[:300])
     return {"queued": queued}
 
 
@@ -223,6 +229,7 @@ async def document_file(doc_id: str):
     path = _stored_file(doc)
     if not path:
         raise HTTPException(404, "Копия файла не сохранилась — загрузите документ заново")
+    auth.audit("Скачивание документа", doc["filename"])
     return FileResponse(path, filename=doc["filename"])
 
 
@@ -242,6 +249,8 @@ async def open_document(doc_id: str):
 async def delete_document(doc_id: str):
     if not re.fullmatch(r"[0-9a-f]{16}", doc_id):
         raise HTTPException(400, "Некорректный идентификатор")
+    doc = next((d for d in await store.list_docs() if d["doc_id"] == doc_id), None)
+    auth.audit("Удаление документа", doc["filename"] if doc else doc_id)
     await store.delete_doc(doc_id)
     folder = Path(config.STORAGE_DIR) / doc_id
     if folder.is_dir():

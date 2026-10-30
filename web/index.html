@@ -12,6 +12,21 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<!-- Вход. Обычная форма с autocomplete — её подхватывают менеджеры паролей (Связка ключей, 1Password, браузер) -->
+<div class="auth" id="auth" hidden>
+  <form class="auth-card" id="authForm" autocomplete="on">
+    <img src="icon.png" alt="" class="auth-logo">
+    <h1 id="authTitle">Вход в DocSearch</h1>
+    <p class="muted" id="authHint"></p>
+    <label>Имя пользователя<input name="username" id="authUser" autocomplete="username" required autocapitalize="off" spellcheck="false"></label>
+    <label id="authNameRow" hidden>ФИО (необязательно)<input name="full_name" id="authFullName" autocomplete="name"></label>
+    <label>Пароль<input type="password" name="password" id="authPass" autocomplete="current-password" required></label>
+    <label id="authPass2Row" hidden>Повторите пароль<input type="password" id="authPass2" autocomplete="new-password"></label>
+    <div class="auth-err" id="authErr"></div>
+    <button class="send" id="authBtn" type="submit">Войти</button>
+  </form>
+</div>
+<div class="toast" id="toast" hidden></div>
 <div class="layout">
   <aside class="sidebar" id="sidebar">
     <div class="brand">
@@ -48,9 +63,18 @@
         <button class="tab active" data-tab="chat" role="tab">Вопросы</button>
         <button class="tab" data-tab="kb" role="tab">База знаний <span id="kbCount" class="muted"></span></button>
         <button class="tab" data-tab="risks" role="tab">Реестр рисков</button>
+        <button class="tab" data-tab="admin" role="tab" id="adminTab" hidden>Админ</button>
       </nav>
       <button class="link" id="clearChat">Новый диалог</button>
       <button class="icon-btn" id="themeToggle" title="Тема"></button>
+      <div class="user-menu" id="userMenu" hidden>
+        <button class="icon-btn user-btn" id="userBtn" title="Пользователь"></button>
+        <div class="user-pop" id="userPop" hidden>
+          <div class="user-name" id="userName"></div>
+          <button class="link" id="changePass">Сменить пароль</button>
+          <button class="link" id="logout">Выйти</button>
+        </div>
+      </div>
     </header>
 
     <section class="view" id="view-chat">
@@ -120,9 +144,58 @@
       <div class="hint muted">Реестр собирается из анализов рисков. Запустить анализ: «База знаний» → документ → «Анализ рисков».</div>
       <div class="kb-table-wrap"><table class="kb-table risk-table" id="rkTable"></table></div>
     </section>
+
+    <section class="view admin" id="view-admin" hidden>
+      <div class="seg" id="adminMode">
+        <button data-pane="console" class="active">Консоль</button>
+        <button data-pane="users">Пользователи</button>
+        <button data-pane="audit">Журнал</button>
+        <button data-pane="logs">Логи</button>
+      </div>
+
+      <div class="pane" id="pane-console">
+        <div class="console" id="consoleOut"></div>
+        <form class="console-in" id="consoleForm">
+          <span>&gt;</span>
+          <input id="consoleInput" autocomplete="off" spellcheck="false" placeholder="help — список команд; можно написать и обычным языком">
+        </form>
+      </div>
+
+      <div class="pane" id="pane-users" hidden>
+        <form class="kb-tools" id="newUserForm" autocomplete="off">
+          <input name="username" placeholder="Имя пользователя" required>
+          <input name="full_name" placeholder="ФИО">
+          <input name="password" type="password" placeholder="Пароль (от 8 символов)" autocomplete="new-password" required>
+          <select name="role"><option value="user">пользователь</option><option value="admin">администратор</option></select>
+          <button class="send small" type="submit">Добавить</button>
+        </form>
+        <div class="kb-table-wrap"><table class="kb-table" id="usersTable"></table></div>
+      </div>
+
+      <div class="pane" id="pane-audit" hidden>
+        <div class="kb-tools">
+          <select id="auditUser"><option value="">Все пользователи</option></select>
+          <input type="search" id="auditAction" placeholder="Действие: вход, удаление, консоль…">
+          <label class="check"><input type="checkbox" id="auditFails"> только неудачные</label>
+          <button class="btn" id="auditRefresh">Обновить</button>
+        </div>
+        <div class="kb-table-wrap"><table class="kb-table" id="auditTable"></table></div>
+      </div>
+
+      <div class="pane" id="pane-logs" hidden>
+        <div class="kb-tools">
+          <select id="logFile"></select>
+          <button class="btn" id="logRefresh">Обновить</button>
+          <a class="send small" href="/api/admin/logs.zip" download>Скачать все логи (zip)</a>
+        </div>
+        <pre class="logview" id="logText"></pre>
+      </div>
+    </section>
   </main>
 </div>
+<script src="auth.js"></script>
 <script src="app.js"></script>
 <script src="analysis.js"></script>
+<script src="admin.js"></script>
 </body>
 </html>

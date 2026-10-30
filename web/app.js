@@ -145,10 +145,11 @@ function showTab(name) {
   state.tab = name;
   const tabFor = name === "analysis" ? "kb" : name;
   document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === tabFor));
-  for (const v of ["chat", "kb", "risks", "analysis"]) $(`#view-${v}`).hidden = v !== name;
+  for (const v of ["chat", "kb", "risks", "analysis", "admin"]) $(`#view-${v}`).hidden = v !== name;
   $("#clearChat").hidden = name !== "chat";
   if (name === "kb") refreshDocs();
   if (name === "risks") window.renderRisksTab?.();
+  if (name === "admin") window.renderAdmin?.();
 }
 document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => showTab(t.dataset.tab)));
 
@@ -423,6 +424,7 @@ $("#toggleSidebar").addEventListener("click", () => $("#sidebar").classList.togg
 
 // ---------- старт ----------
 (async function init() {
+  await window.authReady;   // сначала вход (auth.js)
   refreshDocs(); pollJobs();
   let ok = await refreshStatus();
   const tick = async () => { ok = await refreshStatus(); setTimeout(tick, ok ? 30000 : 3000); };

@@ -17,14 +17,15 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
-from . import config, exports, ingest_service, legal, ollama, risks, store
+from . import auth, config, exports, ingest_service, legal, ollama, risks, store
 from .chunking import normalize
 from .parsing import extract_pages
 
 log = logging.getLogger("analysis")
 app = FastAPI(title="Анализ документов")
+auth.protect(app)
 
-META_VERSION = 1
+META_VERSION = 2   # 2 — номер документа хранится как в тексте (с заглавными буквами)
 _meta_cache: dict[tuple, dict] = {}
 _meta_lock = asyncio.Lock()
 
@@ -93,7 +94,29 @@ async def meta(doc: dict) -> dict:
         data = {**await asyncio.to_thread(legal.analyze_meta, await doc_text(doc)),
                 "v": META_VERSION, "uploaded_at": doc.get("uploaded_at")}
         _write_json(_dir(doc_id) / "meta.json", data)
+    # исправления администратора (консоль: meta <id> set …) важнее автоматического определения
+    override = _read_json(Path(config.STORAGE_DIR) / doc_id / "meta_override.json", {})
+    if override:
+        data = {**data, **override, "overridden": sorted(override)}
+        data["type_name"] = legal.TYPES.get(data["type"], data.get("type_name"))
     _meta_cache[key] = data
+    return data
+
+
+META_FIELDS = {"type", "number", "date", "title"}
+
+
+def set_override(doc_id: str, fields: dict | None) -> dict:
+    """Исправить реквизиты вручную (None — вернуть автоматические)."""
+    path = _dir(doc_id) / "meta_override.json"
+    if fields is None:
+        path.unlink(missing_ok=True)
+        data = {}
+    else:
+        data = {**_read_json(path, {}), **fields}
+        _write_json(path, data)
+    for key in [k for k in _meta_cache if k[0] == doc_id]:
+        del _meta_cache[key]
     return data
 
 
@@ -153,6 +176,7 @@ async def add_link(req: LinkReq):
     if pair not in data.setdefault("add", []):
         data["add"].append(pair)
     _write_json(_links_file(), data)
+    auth.audit("Связь добавлена", f"{req.from_id} → {req.to_id}")
     return {"ok": True}
 
 
@@ -164,6 +188,7 @@ async def remove_link(req: LinkReq):
     if pair not in data.setdefault("remove", []):
         data["remove"].append(pair)
     _write_json(_links_file(), data)
+    auth.audit("Связь удалена", f"{req.from_id} → {req.to_id}")
     return {"ok": True}
 
 
@@ -260,8 +285,10 @@ async def build_consolidated(contract_id: str, use_llm: bool = True) -> dict:
 @app.post("/consolidate/{doc_id}")
 async def consolidate(doc_id: str):
     """Договор с учётом всех привязанных доп. соглашений (по порядку дат)."""
-    await _doc(doc_id)
-    return await build_consolidated(doc_id)
+    doc = await _doc(doc_id)
+    result = await build_consolidated(doc_id)
+    auth.audit("Сводная редакция", doc["filename"])
+    return result
 
 
 def _saved_consolidated(doc_id: str) -> dict:
@@ -289,6 +316,7 @@ def _consolidated_name(result: dict, redline: bool) -> str:
 async def consolidated_docx(doc_id: str, redline: bool = False):
     result = _saved_consolidated(doc_id)
     data = await asyncio.to_thread(exports.consolidated_docx, result, redline)
+    auth.audit("Выгрузка сводной редакции", result["contract"]["filename"])
     return _download(data, _consolidated_name(result, redline), DOCX)
 
 
@@ -311,6 +339,7 @@ class CompareReq(BaseModel):
 @app.post("/compare")
 async def compare(req: CompareReq):
     da, db = await _doc(req.a), await _doc(req.b)
+    auth.audit("Сравнение документов", f"{da['filename']} ↔ {db['filename']}")
     result = await asyncio.to_thread(legal.compare, await doc_text(da), await doc_text(db))
     return {"a": {"doc_id": da["doc_id"], "filename": da["filename"]},
             "b": {"doc_id": db["doc_id"], "filename": db["filename"]}, **result}
@@ -379,6 +408,7 @@ class RiskReq(BaseModel):
 @app.post("/risks/{doc_id}")
 async def analyze_risks(doc_id: str, req: RiskReq):
     doc = await _doc(doc_id)
+    auth.audit("Анализ рисков", doc["filename"] + (f" (сторона: {req.side})" if req.side else ""))
 
     async def gen():
         try:
@@ -428,6 +458,10 @@ async def analyze_risks(doc_id: str, req: RiskReq):
     return _stream(gen())
 
 
+def save_register(reg: dict) -> None:
+    _write_json(_dir(reg["doc_id"]) / "risks.json", reg)
+
+
 def _registers(doc_id: str | None = None) -> list[dict]:
     root = Path(config.STORAGE_DIR)
     paths = [root / doc_id / "risks.json"] if doc_id else sorted(root.glob("*/risks.json"))
@@ -456,6 +490,7 @@ async def risks_xlsx(doc_id: str | None = None):
     if not regs:
         raise HTTPException(404, "Реестр пуст: запустите анализ рисков хотя бы для одного документа")
     data = await asyncio.to_thread(exports.risks_xlsx, regs)
+    auth.audit("Выгрузка реестра рисков", regs[0]["filename"] if doc_id else "все документы")
     name = f"Реестр рисков — {Path(regs[0]['filename']).stem}.xlsx" if doc_id else \
         f"Реестр рисков {datetime.now():%d.%m.%Y}.xlsx"
     return _download(data, name, XLSX)

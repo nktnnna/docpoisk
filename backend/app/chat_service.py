@@ -17,12 +17,13 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
-from . import config, lexical, ollama, store
+from . import auth, config, lexical, ollama, store
 
 log = logging.getLogger("chat")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 app = FastAPI(title="Вопросы по документам")
+auth.protect(app)
 
 SYSTEM_PROMPT = """Ты — ассистент, который отвечает на вопросы по фрагментам документов (договоры, регламенты, судебные материалы и т.п.).
 
@@ -279,6 +280,7 @@ async def search(req: Ask):
 
 @app.post("/ask")
 async def ask(req: Ask):
+    auth.audit("Вопрос", req.question[:200])
     async def gen():
         try:
             turns = _turns(req.history)

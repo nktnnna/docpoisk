@@ -4,8 +4,9 @@
 # Запуск:  docker compose up -d --build     → http://localhost:8080
 #
 #   web     — веб-интерфейс (nginx)
-#   ingest  — чтение документов, нарезка на чанки, эмбеддинги, запись в базу;
-#             анализ: связи документов, сводная редакция договора, сравнение, реестр рисков
+#   ingest  — вход и пользователи; чтение документов, нарезка на чанки, эмбеддинги, запись в базу;
+#             анализ: связи документов, сводная редакция договора, сравнение, реестр рисков;
+#             администрирование: журнал входов, логи, консоль
 #   chat    — поиск по базе (косинусная близость) и ответ нейросети
 #   qdrant  — векторная база данных
 #   ollama  — локальные нейросети: LLM + модель эмбеддингов
@@ -21,6 +22,9 @@ x-backend: &backend
     EMBED_MODEL: ${EMBED_MODEL:-bge-m3}
     STORAGE_DIR: /data/files
     INBOX_DIR: /data/inbox
+    AUTH_DIR: /data/auth
+    LOG_DIR: /data/logs
+    LOG_LEVEL: ${LOG_LEVEL:-INFO}
   depends_on:
     - qdrant
     - ollama
@@ -40,14 +44,19 @@ services:
 
   ingest:
     <<: *backend
-    command: ["uvicorn", "app.ingest_api:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["uvicorn", "app.ingest_api:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
     volumes:
       - ./data/files:/data/files
       - ./data/inbox:/data/inbox
+      - ./data/auth:/data/auth
+      - ./data/logs:/data/logs
 
   chat:
     <<: *backend
-    command: ["uvicorn", "app.chat_service:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: ["uvicorn", "app.chat_api:app", "--host", "0.0.0.0", "--port", "8000", "--proxy-headers", "--forwarded-allow-ips", "*"]
+    volumes:
+      - ./data/auth:/data/auth     # проверка входа: те же пользователи и ключ сессий
+      - ./data/logs:/data/logs
 
   qdrant:
     image: qdrant/qdrant:v1.12.5

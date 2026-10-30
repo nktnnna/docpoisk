@@ -170,7 +170,7 @@ def own_requisites(text: str, doc_type: str) -> tuple[str | None, str | None]:
                if not re.search(r"(?:к|по)\s+(?:договор|контракт)", x, re.IGNORECASE)]
         m = re.search(DATE, "\n".join(own))
         date = parse_date(m.group(0)) if m else None
-    return (norm_num(num) if num else None), date
+    return (num.strip(".-/ ") if num else None), date
 
 
 def analyze_meta(text: str) -> dict:
@@ -178,7 +178,7 @@ def analyze_meta(text: str) -> dict:
     num, date = own_requisites(text, doc_type)
     refs = contract_refs(text)
     if doc_type == "contract" and num:
-        refs = [r for r in refs if r["num"] != num]
+        refs = [r for r in refs if r["num"] != norm_num(num)]
     title = next((x for x in _title_lines(text, 3) if len(x) > 3), "")[:150]
     return {"type": doc_type, "type_name": TYPES[doc_type], "number": num, "date": date,
             "title": title, "parties": parties(text), "refs": refs}
@@ -189,7 +189,7 @@ def build_links(metas: dict[str, dict], manual: dict) -> list[dict]:
     by_num: dict[str, list[str]] = {}
     for doc_id, m in metas.items():
         if m["type"] == "contract" and m.get("number"):
-            by_num.setdefault(m["number"], []).append(doc_id)
+            by_num.setdefault(norm_num(m["number"]), []).append(doc_id)
     links: dict[tuple[str, str], dict] = {}
     for doc_id, m in metas.items():
         for ref in m.get("refs", []):

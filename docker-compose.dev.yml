@@ -1,0 +1,46 @@
+# Версия для разработчика: те же контейнеры, плюс
+#   - код backend/app подключён с хоста и перезагружается при изменении (uvicorn --reload);
+#   - порты каждого сервиса открыты наружу (только на 127.0.0.1) — можно обращаться к ним напрямую;
+#   - подробные логи (LOG_LEVEL=DEBUG) в ./data/logs, журнал входов в ./data/auth/audit.jsonl.
+#
+# Запуск:  bash dev.sh up      (или: docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build)
+# Логи:    bash dev.sh logs [сервис]   ·   выгрузить всё одним архивом: bash dev.sh export-logs
+
+x-dev: &dev
+  environment:
+    LOG_LEVEL: DEBUG
+  volumes:
+    - ./backend/app:/srv/app
+    - ./backend/tests:/srv/tests
+    - ./data/files:/data/files
+    - ./data/inbox:/data/inbox
+    - ./data/auth:/data/auth
+    - ./data/logs:/data/logs
+
+services:
+  web:
+    volumes:
+      - ./web:/usr/share/nginx/html:ro
+      - ./web/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+
+  ingest:
+    <<: *dev
+    command: ["uvicorn", "app.ingest_api:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/srv/app",
+              "--proxy-headers", "--forwarded-allow-ips", "*"]
+    ports:
+      - "127.0.0.1:8001:8000"     # http://127.0.0.1:8001/docs — API индексации; /analysis/docs, /admin/docs, /auth/docs
+
+  chat:
+    <<: *dev
+    command: ["uvicorn", "app.chat_api:app", "--host", "0.0.0.0", "--port", "8000", "--reload", "--reload-dir", "/srv/app",
+              "--proxy-headers", "--forwarded-allow-ips", "*"]
+    ports:
+      - "127.0.0.1:8002:8000"     # http://127.0.0.1:8002/docs — API вопросов
+
+  qdrant:
+    ports:
+      - "127.0.0.1:6333:6333"     # http://127.0.0.1:6333/dashboard — панель векторной базы
+
+  ollama:
+    ports:
+      - "127.0.0.1:11434:11434"   # нейросети напрямую: curl http://127.0.0.1:11434/api/tags

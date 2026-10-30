@@ -34,6 +34,7 @@
   color-scheme: dark;
 }
 * { box-sizing: border-box; }
+[hidden] { display: none !important; }   /* иначе display у класса (например, .btn) перебивает hidden */
 body { margin: 0; background: var(--bg); color: var(--ink); font-size: 15px; line-height: 1.5; }
 button { font: inherit; color: inherit; cursor: pointer; }
 .muted { color: var(--muted); }
@@ -127,6 +128,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .kb-tools { display: flex; gap: 8px; flex-wrap: wrap; }
 .kb-tools input, .kb-tools select, .kb-chunks-head input { font: inherit; font-size: 14px; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; outline: none; }
 .kb-tools input { flex: 1; min-width: 180px; }
+.kb-tools input[type="checkbox"] { flex: none; min-width: 0; }
 .kb-tools input:focus, .kb-chunks-head input:focus { border-color: var(--accent); }
 .kb-body { flex: 1; display: flex; gap: 14px; min-height: 0; }
 .kb-table-wrap { flex: 1; overflow: auto; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); min-width: 0; }
@@ -235,6 +237,44 @@ del { color: var(--del-fg); }
 .grow-none { flex: none; }
 .risks-view .kb-table-wrap { flex: none; }
 
+/* ---------- вход, меню пользователя, уведомления ---------- */
+.auth { position: fixed; inset: 0; z-index: 50; background: var(--bg); display: grid; place-items: center; padding: 16px; }
+.dialog-back { background: color-mix(in srgb, var(--bg) 70%, transparent); backdrop-filter: blur(3px); z-index: 60; }
+.auth-card { width: 100%; max-width: 380px; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 28px; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 20px 60px rgba(0,0,0,.12); }
+.auth-card h1 { font-size: 21px; margin: 0; }
+.auth-card p { margin: 0; font-size: 13.5px; }
+.auth-card label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+.auth-card input { font: inherit; font-size: 15px; color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 9px; padding: 9px 12px; outline: none; }
+.auth-card input:focus { border-color: var(--accent); }
+.auth-card .send { padding: 10px; }
+.auth-logo { width: 52px; height: 52px; }
+.auth-err { color: var(--warn); font-size: 13.5px; min-height: 1em; }
+.toast { position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); z-index: 70; background: var(--ink); color: var(--panel); padding: 10px 16px; border-radius: 10px; font-size: 14px; max-width: min(560px, calc(100vw - 32px)); box-shadow: 0 8px 30px rgba(0,0,0,.2); }
+.toast.bad { background: var(--hi-bg); color: var(--hi-fg); border: 1px solid var(--hi-fg); }
+.user-menu { position: relative; }
+.user-btn { font-size: 12.5px; font-weight: 700; color: var(--accent); }
+.user-pop { position: absolute; right: 0; top: 42px; z-index: 20; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; min-width: 210px; display: flex; flex-direction: column; gap: 8px; align-items: flex-start; box-shadow: 0 10px 30px rgba(0,0,0,.12); font-size: 13.5px; }
+
+/* ---------- администрирование ---------- */
+.admin { padding: 20px 24px; gap: 14px; overflow: hidden; }
+.pane { flex: 1; display: flex; flex-direction: column; gap: 12px; min-height: 0; }
+.pane .kb-table-wrap { flex: 1; }
+.console { flex: 1; min-height: 200px; overflow-y: auto; background: #0f1220; color: #d7dcf5; border-radius: var(--radius); padding: 14px 16px; font: 13px/1.5 ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.con-line { white-space: pre-wrap; word-break: break-word; margin-bottom: 6px; }
+.con-line.muted { color: #8a90ad; }
+.con-cmd { color: #9fb0ff; font-weight: 600; }
+.con-err { color: #ff9e8a; }
+.con-line .btn { margin-top: 6px; background: #1d2440; color: #d7dcf5; border-color: #2f3966; font-family: inherit; }
+.console-in { display: flex; align-items: center; gap: 8px; background: #0f1220; color: #9fb0ff; border-radius: var(--radius); padding: 4px 14px; font: 14px ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+.console-in input { flex: 1; background: none; border: none; outline: none; color: #e8ebfa; font: inherit; padding: 8px 0; }
+.logview { flex: 1; margin: 0; overflow: auto; background: #0f1220; color: #cfd5ef; border-radius: var(--radius); padding: 14px 16px; font: 12px/1.45 ui-monospace, "SF Mono", Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-all; }
+#usersTable .actions { display: flex; gap: 4px; }
+#usersTable td { vertical-align: middle; }
+#usersTable select { font: inherit; font-size: 13px; color: inherit; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 2px 4px; }
+#auditTable td.wrap { white-space: normal; max-width: 420px; }
+#auditTable tr.fail td { background: color-mix(in srgb, var(--hi-bg) 45%, transparent); }
+#newUserForm input { flex: 1; min-width: 140px; }
+
 .icon-btn { background: none; border: 1px solid var(--line); border-radius: 8px; width: 36px; height: 36px; flex-shrink: 0; display: inline-grid; place-items: center; color: var(--ink); }
 .icon-btn:hover { border-color: var(--accent); color: var(--accent); }
 .mobile-only { display: none; }
@@ -251,7 +291,8 @@ del { color: var(--del-fg); }
   .kb-table-wrap { flex: none; }
   .kb-detail { width: auto; }
   #kbTable th:nth-child(3), #kbTable td:nth-child(3), #kbTable th:nth-child(4), #kbTable td:nth-child(4), #kbTable th:nth-child(7), #kbTable td:nth-child(7) { display: none; }
-  .analysis, .risks-view { padding: 14px 16px; }
+  .analysis, .risks-view, .admin { padding: 14px 16px; }
+  .admin { overflow-y: auto; }
   .cl { grid-template-columns: 40px 1fr; padding: 8px 10px; }
   .tab { padding: 6px 8px; }
 }
