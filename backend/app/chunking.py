@@ -33,7 +33,7 @@ _HEADING = re.compile(
 _ORG = re.compile(r"^(?:ООО|ОАО|ЗАО|ПАО|АО|ИП|ФГУП|МУП|ГУП)\b")  # «ООО «РОМАШКА»» — не заголовок
 
 
-def _headings(text: str) -> list[str]:
+def headings(text: str) -> list[str]:
     found = []
     for line in text.split("\n"):
         line = line.strip()
@@ -99,7 +99,7 @@ def chunk_pages(pages: list[tuple[int | None, str]], size: int, overlap: int) ->
     section = ""  # раздел переходит со страницы на страницу, пока не встретится новый заголовок
     for page_no, text in pages:
         for piece in split_text(normalize(text), size, overlap):
-            heads = _headings(piece)
+            heads = headings(piece)
             starts_with_head = heads and piece.lstrip().startswith(heads[0])
             result.append(Chunk(text=piece, page=page_no, index=len(result),
                                 section=heads[0] if starts_with_head else section))

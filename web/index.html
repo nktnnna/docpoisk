@@ -39,26 +39,55 @@
   <main class="chat">
     <header class="chat-head">
       <button class="icon-btn mobile-only" id="toggleSidebar" aria-label="Документы">☰</button>
-      <div class="chat-title">Вопросы по документам</div>
+      <nav class="tabs" role="tablist">
+        <button class="tab active" data-tab="chat" role="tab">Вопросы</button>
+        <button class="tab" data-tab="kb" role="tab">База знаний <span id="kbCount" class="muted"></span></button>
+      </nav>
       <button class="link" id="clearChat">Новый диалог</button>
     </header>
 
-    <div class="messages" id="messages">
-      <div class="empty" id="empty">
-        <h1>Спросите что-нибудь о ваших документах</h1>
-        <p class="muted">Ответ строится только по загруженным файлам, со ссылками на источники.</p>
-        <div class="examples">
-          <button class="example">Какие этапы работ предусмотрены договором?</button>
-          <button class="example">В каком суде рассматриваются споры по договору?</button>
-          <button class="example">Какой срок оплаты и размер неустойки?</button>
+    <section class="view" id="view-chat">
+      <div class="messages" id="messages">
+        <div class="empty" id="empty">
+          <h1>Спросите что-нибудь о ваших документах</h1>
+          <p class="muted">Ответ строится только по загруженным файлам, со ссылками на источники.</p>
+          <div class="examples">
+            <button class="example">Какие этапы работ предусмотрены договором?</button>
+            <button class="example">В каком суде рассматриваются споры по договору?</button>
+            <button class="example">Какой срок оплаты и размер неустойки?</button>
+          </div>
         </div>
       </div>
-    </div>
 
-    <form class="composer" id="composer">
-      <textarea id="question" rows="1" placeholder="Задайте вопрос… (Enter — отправить, Shift+Enter — новая строка)"></textarea>
-      <button type="submit" id="send" class="send">Спросить</button>
-    </form>
+      <form class="composer" id="composer">
+        <textarea id="question" rows="1" placeholder="Задайте вопрос… (Enter — отправить, Shift+Enter — новая строка)"></textarea>
+        <button type="submit" id="send" class="send">Спросить</button>
+      </form>
+    </section>
+
+    <section class="view kb" id="view-kb" hidden>
+      <div class="kb-stats" id="kbStats"></div>
+      <div class="kb-tools">
+        <input type="search" id="kbFilter" placeholder="Поиск по названию…">
+        <select id="kbFormat"><option value="">Все форматы</option></select>
+        <select id="kbSort">
+          <option value="date">Сначала новые</option>
+          <option value="date-asc">Сначала старые</option>
+          <option value="name">По названию</option>
+          <option value="size">По размеру</option>
+          <option value="chunks">По числу фрагментов</option>
+        </select>
+      </div>
+      <div class="kb-body">
+        <div class="kb-table-wrap">
+          <table class="kb-table">
+            <thead><tr><th>Документ</th><th>Формат</th><th class="num">Размер</th><th class="num">Стр.</th><th class="num">Фрагм.</th><th>Загружен</th></tr></thead>
+            <tbody id="kbRows"></tbody>
+          </table>
+        </div>
+        <aside class="kb-detail" id="kbDetail" hidden></aside>
+      </div>
+    </section>
   </main>
 </div>
 <script src="app.js"></script>

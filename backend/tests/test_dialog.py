@@ -142,3 +142,23 @@ def test_follow_up_question_uses_dialog(db, monkeypatch):
     assert [m["role"] for m in final] == ["system", "user", "assistant", "user"]
     assert "[1]" not in final[2]["content"]                     # старые ссылки не путают модель
     assert "С учётом диалога" in final[-1]["content"] and "а для подрядчика?" in final[-1]["content"]
+
+
+def test_knowledge_base_api(db, tmp_path, monkeypatch):
+    from app import ingest_service
+
+    monkeypatch.setattr(config, "STORAGE_DIR", str(tmp_path / "files"))
+    (tmp_path / "files" / ("a" * 16)).mkdir(parents=True)
+    (tmp_path / "files" / ("a" * 16) / "Договор_подряда_15.pdf").write_bytes(b"x" * 2048)
+
+    [doc] = asyncio.run(ingest_service.documents())
+    assert doc["format"] == "pdf" and doc["size"] == 2048 and doc["pages"] == 4 and not doc["outdated"]
+
+    full = asyncio.run(ingest_service.document("a" * 16))
+    assert "5. ОТВЕТСТВЕННОСТЬ СТОРОН" in full["sections"] and "8. СПОРЫ" in full["sections"]
+    assert [c["chunk"] for c in full["chunks_list"]] == list(range(full["chunks"]))
+    assert full["chunks_list"][-1]["page"] == 4
+
+    from fastapi import HTTPException
+    with pytest.raises(HTTPException):
+        asyncio.run(ingest_service.document("b" * 16))

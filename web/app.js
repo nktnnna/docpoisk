@@ -7,6 +7,9 @@ const state = {
   selected: new Set(),  // doc_id выбранных документов (пусто = все)
   busy: false,
   knownJobs: new Set(),
+  docs: [],             // все документы базы знаний
+  openDoc: null,        // doc_id, открытый в карточке базы знаний
+  canOpen: false,       // сервер умеет открыть файл в программе по умолчанию (настольное приложение)
 };
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -24,6 +27,7 @@ async function refreshStatus() {
     const h = await api(`${API.ingest}/health`);
     $("#formats").textContent = h.formats.map((f) => f.slice(1).toUpperCase()).join(", ");
     $("#scanInbox").title = `Проиндексировать всё из папки ${h.inbox}`;
+    state.canOpen = !!h.can_open;
     const m = h.models;
     if (!m.llm) {
       el.innerHTML = `<b>Ollama не запущена.</b> Установите её с ollama.com (один раз) и откройте — затем перезапустите ДокПоиск.<br><span class="muted">${esc(m.error || "")}</span>`;
@@ -47,8 +51,11 @@ async function refreshStatus() {
 async function refreshDocs() {
   let docs = [];
   try { docs = await api(`${API.ingest}/documents`); } catch { return; }
+  state.docs = docs;
+  renderKb();
   const ul = $("#docs");
   $("#docCount").textContent = docs.length ? `(${docs.length})` : "";
+  $("#kbCount").textContent = docs.length ? `(${docs.length})` : "";
   const ids = new Set(docs.map((d) => d.doc_id));
   for (const id of [...state.selected]) if (!ids.has(id)) state.selected.delete(id);
   const outdated = docs.filter((d) => d.outdated).length;
@@ -78,12 +85,132 @@ $("#docs").addEventListener("change", (e) => {
   e.target.checked ? state.selected.add(id) : state.selected.delete(id);
   updateScopeHint();
 });
-$("#docs").addEventListener("click", async (e) => {
-  const btn = e.target.closest(".del"); if (!btn) return;
-  if (!confirm(`Удалить «${btn.dataset.name}» из базы знаний?`)) return;
-  await api(`${API.ingest}/documents/${btn.dataset.id}`, { method: "DELETE" });
-  refreshDocs();
+$("#docs").addEventListener("click", (e) => {
+  const btn = e.target.closest(".del"); if (btn) deleteDoc(btn.dataset.id, btn.dataset.name);
 });
+
+async function deleteDoc(id, name) {
+  if (!confirm(`Удалить «${name}» из базы знаний?`)) return false;
+  await api(`${API.ingest}/documents/${id}`, { method: "DELETE" });
+  if (state.openDoc === id) closeDetail();
+  refreshDocs();
+  return true;
+}
+
+// ---------- база знаний ----------
+const fmtSize = (b) => b == null ? "—" : b < 1024 ? `${b} Б` : b < 1048576 ? `${(b / 1024).toFixed(0)} КБ` : `${(b / 1048576).toFixed(1)} МБ`;
+const fmtDate = (iso, full = false) => !iso ? "—" : new Date(iso).toLocaleString("ru-RU", full
+  ? { day: "numeric", month: "long", year: "numeric", hour: "2-digit", minute: "2-digit" }
+  : { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+const plural = (n, one, few, many) => { const m10 = n % 10, m100 = n % 100; return m10 === 1 && m100 !== 11 ? one : m10 >= 2 && m10 <= 4 && (m100 < 10 || m100 >= 20) ? few : many; };
+
+function showTab(name) {
+  document.querySelectorAll(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
+  $("#view-chat").hidden = name !== "chat";
+  $("#view-kb").hidden = name !== "kb";
+  $("#clearChat").hidden = name !== "chat";
+  if (name === "kb") refreshDocs();
+}
+document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => showTab(t.dataset.tab)));
+
+function renderKb() {
+  const docs = state.docs;
+  const total = docs.reduce((a, d) => a + (d.size || 0), 0);
+  const chunks = docs.reduce((a, d) => a + d.chunks, 0);
+  const last = docs.map((d) => d.uploaded_at).filter(Boolean).sort().pop();
+  const outdated = docs.filter((d) => d.outdated).length;
+  $("#kbStats").innerHTML = [
+    [docs.length, plural(docs.length, "документ", "документа", "документов")],
+    [fmtSize(total), "общий объём"],
+    [chunks, plural(chunks, "фрагмент", "фрагмента", "фрагментов")],
+    [last ? fmtDate(last) : "—", "последняя загрузка"],
+  ].map(([v, l]) => `<div class="stat"><b>${esc(v)}</b><span>${l}</span></div>`).join("") +
+    (outdated ? `<div class="stat warn"><b>${outdated}</b><span>с устаревшим индексом</span></div>` : "");
+
+  const fmtSel = $("#kbFormat"), cur = fmtSel.value;
+  const formats = [...new Set(docs.map((d) => d.format))].sort();
+  fmtSel.innerHTML = `<option value="">Все форматы</option>` + formats.map((f) => `<option value="${esc(f)}">${esc(f.toUpperCase())}</option>`).join("");
+  fmtSel.value = formats.includes(cur) ? cur : "";
+
+  const needle = $("#kbFilter").value.trim().toLowerCase();
+  const sort = $("#kbSort").value;
+  const rows = docs
+    .filter((d) => (!needle || d.filename.toLowerCase().includes(needle)) && (!fmtSel.value || d.format === fmtSel.value))
+    .sort((a, b) => sort === "name" ? a.filename.localeCompare(b.filename, "ru")
+      : sort === "size" ? (b.size || 0) - (a.size || 0)
+      : sort === "chunks" ? b.chunks - a.chunks
+      : sort === "date-asc" ? (a.uploaded_at || "").localeCompare(b.uploaded_at || "")
+      : (b.uploaded_at || "").localeCompare(a.uploaded_at || ""));
+
+  $("#kbRows").innerHTML = rows.length ? rows.map((d) => `
+    <tr data-id="${d.doc_id}" class="${state.openDoc === d.doc_id ? "active" : ""}">
+      <td class="name" title="${esc(d.filename)}">${esc(d.filename)}${d.outdated ? ` <span class="badge" title="Проиндексирован старой версией — переиндексируйте для точного поиска">старый индекс</span>` : ""}</td>
+      <td><span class="fmt">${esc(d.format.toUpperCase())}</span></td>
+      <td class="num">${fmtSize(d.size)}</td>
+      <td class="num">${d.pages ?? "—"}</td>
+      <td class="num">${d.chunks}</td>
+      <td class="date">${fmtDate(d.uploaded_at)}</td>
+    </tr>`).join("")
+    : `<tr><td colspan="6" class="kb-empty">${docs.length ? "Ничего не найдено" : "База знаний пуста. Перетащите документы в левую панель."}</td></tr>`;
+}
+["input", "change"].forEach((ev) => ["#kbFilter", "#kbFormat", "#kbSort"].forEach((id) => $(id).addEventListener(ev, renderKb)));
+$("#kbRows").addEventListener("click", (e) => { const tr = e.target.closest("tr[data-id]"); if (tr) openDetail(tr.dataset.id); });
+
+function closeDetail() { state.openDoc = null; $("#kbDetail").hidden = true; renderKb(); }
+
+async function openDetail(id) {
+  state.openDoc = id; renderKb();
+  const box = $("#kbDetail"); box.hidden = false;
+  box.innerHTML = `<div class="muted">Загружаю…</div>`;
+  let d;
+  try { d = await api(`${API.ingest}/documents/${id}`); } catch (e) { box.innerHTML = `<div class="err">Не удалось открыть: ${esc(e.message)}</div>`; return; }
+  if (state.openDoc !== id) return;
+  const row = (k, v) => `<dt>${k}</dt><dd>${v}</dd>`;
+  box.innerHTML = `
+    <div class="kb-detail-head"><h2 title="${esc(d.filename)}">${esc(d.filename)}</h2><button class="icon-btn" id="kbClose" aria-label="Закрыть">✕</button></div>
+    <div class="kb-actions">
+      <button class="send small" id="kbAsk">Спросить по документу</button>
+      ${d.has_file && state.canOpen ? `<button class="btn" id="kbOpen">Открыть файл</button>` : ""}
+      ${d.has_file ? `<a class="btn" href="${API.ingest}/documents/${id}/file" download="${esc(d.filename)}">Скачать</a>` : ""}
+      ${d.has_file ? `<button class="btn" id="kbReindex">Переиндексировать</button>` : ""}
+      <button class="btn danger" id="kbDelete">Удалить</button>
+    </div>
+    <dl class="kb-meta">
+      ${row("Формат", esc(d.format.toUpperCase()))}
+      ${row("Размер", d.size != null ? `${fmtSize(d.size)} <span class="muted">(${d.size.toLocaleString("ru-RU")} байт)</span>` : "копия файла не сохранилась")}
+      ${row("Загружен", fmtDate(d.uploaded_at, true))}
+      ${d.pages ? row("Страниц", d.pages) : ""}
+      ${row("Фрагментов", d.chunks)}
+      ${row("Текста", `${d.characters.toLocaleString("ru-RU")} символов`)}
+      ${row("Индекс", d.outdated ? `<span class="warn">старой версии — переиндексируйте</span>` : "актуальный")}
+      ${row("ID", `<code>${esc(d.doc_id)}</code>`)}
+    </dl>
+    ${d.sections.length ? `<details class="kb-sections"><summary>Разделы (${d.sections.length})</summary><ol>${d.sections.map((x) => `<li>${esc(x)}</li>`).join("")}</ol></details>` : ""}
+    <div class="kb-chunks-head"><b>Текст документа</b><input type="search" id="kbChunkFilter" placeholder="Найти в тексте…"></div>
+    <div class="kb-chunks" id="kbChunks"></div>`;
+
+  const renderChunks = () => {
+    const q = $("#kbChunkFilter").value.trim().toLowerCase();
+    const list = d.chunks_list.filter((c) => !q || c.text.toLowerCase().includes(q));
+    const mark = (t) => { const e = esc(t); if (!q) return e; const re = new RegExp(esc(q).replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "gi"); return e.replace(re, (m) => `<mark>${m}</mark>`); };
+    $("#kbChunks").innerHTML = list.length ? list.map((c) => `
+      <div class="src"><div class="src-head"><span>Фрагмент ${c.chunk + 1}${c.page ? ` · стр. ${c.page}` : ""}${c.section ? ` · ${esc(c.section)}` : ""}</span></div>
+      <div class="src-text full">${mark(c.text)}</div></div>`).join("") : `<div class="muted">Не найдено</div>`;
+  };
+  $("#kbChunkFilter").addEventListener("input", renderChunks);
+  renderChunks();
+
+  $("#kbClose").addEventListener("click", closeDetail);
+  $("#kbAsk").addEventListener("click", () => {
+    state.selected = new Set([id]); refreshDocs(); showTab("chat"); $("#question").focus();
+  });
+  $("#kbOpen")?.addEventListener("click", () => api(`${API.ingest}/documents/${id}/open`, { method: "POST" }).catch((e) => alert(e.message)));
+  $("#kbReindex")?.addEventListener("click", async () => {
+    await api(`${API.ingest}/reindex?doc_id=${id}`, { method: "POST" }); pollJobs();
+    $("#kbReindex").disabled = true; $("#kbReindex").textContent = "В очереди…";
+  });
+  $("#kbDelete").addEventListener("click", () => deleteDoc(id, d.filename));
+}
 
 // ---------- загрузка ----------
 const STATUS_RU = { queued: "в очереди", parsing: "читаю текст", embedding: "считаю эмбеддинги", saving: "сохраняю в базу", done: "готово", error: "ошибка" };

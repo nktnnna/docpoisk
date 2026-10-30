@@ -106,6 +106,20 @@ async def get_chunks(keys: list[tuple[str, int]]) -> dict[tuple[str, int], dict]
     return {(p.payload["doc_id"], p.payload["chunk"]): p.payload for p in res}
 
 
+async def doc_chunks(doc_id: str) -> list[dict]:
+    """Все фрагменты одного документа по порядку — для просмотра в базе знаний."""
+    if not await client().collection_exists(config.COLLECTION):
+        return []
+    result, offset = [], None
+    while True:
+        points, offset = await client().scroll(
+            config.COLLECTION, scroll_filter=_doc_filter([doc_id]), limit=1000, offset=offset,
+            with_payload=True, with_vectors=False)
+        result.extend(p.payload for p in points)
+        if offset is None:
+            return sorted(result, key=lambda c: c["chunk"])
+
+
 async def count() -> int:
     if not await client().collection_exists(config.COLLECTION):
         return 0
@@ -141,7 +155,7 @@ async def list_docs() -> list[dict]:
             config.COLLECTION,
             limit=1000,
             offset=offset,
-            with_payload=["doc_id", "filename", "uploaded_at", "v"],
+            with_payload=["doc_id", "filename", "uploaded_at", "v", "page"],
             with_vectors=False,
         )
         for p in points:
@@ -149,9 +163,11 @@ async def list_docs() -> list[dict]:
                 p.payload["doc_id"],
                 {"doc_id": p.payload["doc_id"], "filename": p.payload["filename"],
                  "uploaded_at": p.payload.get("uploaded_at"), "chunks": 0,
-                 "outdated": p.payload.get("v", 1) < INDEX_VERSION},
+                 "outdated": p.payload.get("v", 1) < INDEX_VERSION, "pages": None},
             )
             d["chunks"] += 1
+            if p.payload.get("page"):
+                d["pages"] = max(d["pages"] or 0, p.payload["page"])
         if offset is None:
             break
     return sorted(docs.values(), key=lambda d: d.get("uploaded_at") or "", reverse=True)

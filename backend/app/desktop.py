@@ -72,6 +72,7 @@ def main() -> None:
 
     import webview
 
+    webview.settings["ALLOW_DOWNLOADS"] = True  # кнопка «Скачать» в базе знаний
     webview.create_window("ДокПоиск", url, width=1280, height=820, min_size=(760, 520))
     webview.start()
     server.should_exit = True
