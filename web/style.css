@@ -53,6 +53,17 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .dz-title { font-weight: 600; }
 .dz-sub { font-size: 12.5px; color: var(--muted); margin-top: 4px; }
 
+.job-summary { font-size: 13px; padding: 8px 10px; border-radius: 8px; background: var(--accent-soft); }
+.doc-filter { font: inherit; font-size: 13px; color: inherit; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 6px 9px; outline: none; }
+.doc-filter:focus { border-color: var(--accent); }
+.kb-table .name .sub { font-size: 11.5px; font-weight: 400; overflow: hidden; text-overflow: ellipsis; }
+.kb-more { display: block; margin: 10px auto; }
+.links li.here { background: var(--accent-soft); border-radius: 6px; padding: 0 4px; }
+.pad-s { padding: 0 4px 4px; }
+details.chain > summary { list-style: none; cursor: pointer; }
+details.chain > summary::-webkit-details-marker { display: none; }
+.thread-meta { font-size: 12.5px; color: var(--muted); }
+.dir { font-size: 12px; color: var(--muted); white-space: nowrap; }
 .jobs { display: flex; flex-direction: column; gap: 6px; }
 .job { font-size: 13px; padding: 8px 10px; border-radius: 8px; background: var(--bg); }
 .job .name { font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

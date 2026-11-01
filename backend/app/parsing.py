@@ -145,7 +145,21 @@ def _rtf(data: bytes) -> list[Page]:
     return [(None, rtf_to_text(_decode(data), errors="ignore"))]
 
 
+def _eml(data: bytes) -> list[Page]:
+    from .mail import eml_pages
+
+    return eml_pages(data)
+
+
+def _msg(data: bytes) -> list[Page]:
+    from .mail import msg_pages
+
+    return msg_pages(data)
+
+
 PARSERS: dict[str, Callable[[bytes], list[Page]]] = {
+    ".eml": _eml,
+    ".msg": _msg,
     ".pdf": _pdf,
     ".docx": _docx,
     ".xlsx": _xlsx,
@@ -163,13 +177,15 @@ PARSERS: dict[str, Callable[[bytes], list[Page]]] = {
     ".rtf": _rtf,
 }
 
-SUPPORTED = sorted(PARSERS)
+# Контейнеры: из них при загрузке достаются отдельные документы (письма из почтового ящика, файлы из архива)
+CONTAINERS = {".zip", ".mbox"}
+SUPPORTED = sorted(set(PARSERS) | CONTAINERS)
 
 
 def unsupported_reason(filename: str) -> str | None:
     """None, если формат поддерживается, иначе — понятное объяснение."""
     ext = Path(filename).suffix.lower()
-    if ext in PARSERS:
+    if ext in PARSERS or ext in CONTAINERS:
         return None
     hint = ""
     if ext in {".doc", ".xls", ".ppt"}:

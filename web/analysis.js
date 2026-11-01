@@ -34,7 +34,8 @@ window.enhanceDetail = async (id, box) => {
   const hasAmendments = inc.some((l) => docInfo(l.from)?.type === "amendment");
   const canConsolidate = (m.type === "contract" && hasAmendments) || (m.type === "amendment" && out.length);
   const others = state.graph.docs.filter((d) => d.doc_id !== id && !out.some((l) => l.to === d.doc_id))
-    .sort((a, b) => (a.type === "contract" ? 0 : 1) - (b.type === "contract" ? 0 : 1) || a.filename.localeCompare(b.filename, "ru"));
+    .sort((a, b) => (a.type === "contract" ? 0 : 1) - (b.type === "contract" ? 0 : 1) || a.filename.localeCompare(b.filename, "ru"))
+    .slice(0, 300);
   const linkRow = (l, otherId, label) => `<li><span class="muted">${esc(label)}</span>
       <button class="link" data-open="${otherId}">${esc(docName(otherId))}</button>
       ${l.auto ? `<span class="muted small" title="Связь найдена автоматически">· ${esc(l.evidence)}</span>` : `<span class="muted small">· вручную</span>`}
@@ -47,14 +48,23 @@ window.enhanceDetail = async (id, box) => {
         <dt>Тип</dt><dd><span class="type t-${m.type}">${esc(m.type_name)}</span></dd>
         ${m.number ? `<dt>Номер</dt><dd>№ ${esc(m.number)}</dd>` : ""}
         ${m.date ? `<dt>Дата</dt><dd>${esc(m.date.split("-").reverse().join("."))}</dd>` : ""}
-        ${m.parties.length ? `<dt>Стороны</dt><dd>${m.parties.map((p) => esc(p.role ? `${p.role}: ${p.name || "—"}` : p.name)).join("<br>")}</dd>` : ""}
+        ${m.subject ? `<dt>Тема</dt><dd>${esc(m.subject)}</dd>` : ""}
+        ${m.sender ? `<dt>От</dt><dd>${esc(m.sender)}</dd>` : ""}
+        ${m.recipient ? `<dt>Кому</dt><dd>${esc(m.recipient)}</dd>` : ""}
+        ${m.parties.length && !m.sender ? `<dt>Стороны</dt><dd>${m.parties.map((p) => esc(p.role ? `${p.role}: ${p.name || "—"}` : p.name)).join("<br>")}</dd>` : ""}
       </dl>
     </div>
+    ${threadOf(id) ? `<div class="kb-block"><b>Цепочка переписки (${threadOf(id).docs.length})</b>
+      <ul class="links">${threadOf(id).docs.map((t) => { const x = docInfo(t); return `<li class="${t === id ? "here" : ""}">
+        <span class="muted">${x?.date ? x.date.split("-").reverse().join(".") : "—"}</span>
+        ${t === id ? `<b>${esc(short(letterTitle(x), 60))}</b>` : `<button class="link" data-open="${t}">${esc(short(letterTitle(x), 60))}</button>`}
+        <span class="dir">${esc(fromTo(x))}</span></li>`; }).join("")}</ul></div>` : ""}
     <div class="kb-block">
       <b>Связи</b>
       <ul class="links">
         ${out.map((l) => linkRow(l, l.to, l.relation)).join("")}
-        ${inc.map((l) => linkRow(l, l.from, docInfo(l.from)?.type_name || "документ")).join("")}
+        ${inc.slice(0, 15).map((l) => linkRow(l, l.from, docInfo(l.from)?.type_name || "документ")).join("")}
+        ${inc.length > 15 ? `<li class="muted">…и ещё ${inc.length - 15} связанных документов (вид «Связи» или «Переписка»)</li>` : ""}
         ${out.length || inc.length ? "" : `<li class="muted">Связей не найдено. Документы связываются автоматически по номеру и дате договора — или привяжите вручную.</li>`}
       </ul>
       <div class="row">
@@ -71,7 +81,7 @@ window.enhanceDetail = async (id, box) => {
       </div>
       <div class="row">
         <select id="cmpWith"><option value="">Сравнить с…</option>
-          ${state.graph.docs.filter((d) => d.doc_id !== id).map((d) => `<option value="${d.doc_id}">${esc(d.filename)}</option>`).join("")}</select>
+          ${state.graph.docs.filter((d) => d.doc_id !== id).slice(0, 500).map((d) => `<option value="${d.doc_id}">${esc(d.filename)}</option>`).join("")}</select>
         <button class="btn" id="cmpBtn">Сравнить</button>
       </div>
     </div>`;
@@ -116,21 +126,69 @@ window.renderChains = (rows) => {
       </div>
       ${parties ? `<div class="muted small">${esc(parties)}</div>` : ""}
       <div class="muted small">${esc(h.filename)}</div>
-      ${kids.length ? `<ul class="chain-kids">${kids.map((k) => `<li>
+      ${kids.length ? `<ul class="chain-kids">${kids.slice(0, 20).map((k) => `<li>
           <span class="type t-${k.type}">${esc(k.type_name)}</span>
           <button class="link" data-open="${k.doc_id}">${esc(k.filename)}</button>
-          <span class="muted">${esc(reqText(k))}</span></li>`).join("")}</ul>`
+          <span class="muted">${esc(reqText(k))}</span></li>`).join("")}${kids.length > 20
+            ? `<li class="muted">…и ещё ${kids.length - 20} — см. вид «Переписка» или фильтр по названию</li>` : ""}</ul>`
         : `<div class="muted small">Связанных документов нет</div>`}
     </div>`;
   }).join("");
-  const loose = rows.filter((d) => !heads.some((h) => h.doc_id === d.doc_id) && !links.some((l) => l.from === d.doc_id));
+  const headIds = new Set(heads.map((h) => h.doc_id)), linkedFrom = new Set(links.map((l) => l.from));
+  const loose = rows.filter((d) => !headIds.has(d.doc_id) && !linkedFrom.has(d.doc_id));
   box.innerHTML = (cards || `<div class="muted pad">Договоров не найдено.</div>`) + (loose.length ? `
     <div class="chain loose"><div class="chain-head"><b>Без связи с договором</b><span class="muted">${loose.length}</span></div>
-      <ul class="chain-kids">${loose.map((d) => { const m = docInfo(d.doc_id); return `<li>
+      <ul class="chain-kids">${loose.slice(0, 100).map((d) => { const m = docInfo(d.doc_id); return `<li>
         ${m ? `<span class="type t-${m.type}">${esc(m.type_name)}</span>` : ""}
         <button class="link" data-open="${d.doc_id}">${esc(d.filename)}</button>
-        <span class="muted">${esc(reqText(m))}</span></li>`; }).join("")}</ul></div>` : "");
+        <span class="muted">${esc(reqText(m))}</span></li>`; }).join("")}${loose.length > 100 ? `<li class="muted">…и ещё ${loose.length - 100}</li>` : ""}</ul></div>` : "");
 };
+// ---------- переписка: цепочки писем ----------
+const short = (s, n = 40) => (s || "").length > n ? s.slice(0, n - 1) + "…" : (s || "");
+const fromTo = (m) => m?.sender || m?.recipient ? `${short(m.sender, 32) || "?"} → ${short(m.recipient, 32) || "?"}` : "";
+let threadLimit = 50;
+const openThreads = new Set();   // раскрытые цепочки: при массовой загрузке список перерисовывается каждые 5 с
+const letterTitle = (m) => m?.subject || m?.title || m?.filename || "";
+window.renderThreads = (rows) => {
+  const box = $("#kbThreads");
+  const scroll = box.parentElement.scrollTop;
+  if (!state.graph) { box.innerHTML = `<div class="muted pad">Читаю реквизиты документов…</div>`; return; }
+  const visible = new Set(rows.map((d) => d.doc_id));
+  const all = (state.graph.threads || []).filter((t) => t.docs.some((id) => visible.has(id)));
+  const letters = state.graph.docs.filter((d) => ["letter", "claim"].includes(d.type));
+  const single = letters.filter((d) => !threadOf(d.doc_id) && visible.has(d.doc_id)).length;
+  if (!all.length) {
+    box.innerHTML = `<div class="muted pad">Цепочек переписки пока нет. Письма связываются автоматически: по «ответу» в почте,
+      по ссылке «на ваш исх. № … от …» и по общей теме при общих участниках.${letters.length ? ` Писем в базе: ${letters.length}.` : ""}</div>`;
+    return;
+  }
+  box.innerHTML = `<div class="muted small pad-s">Цепочек: ${all.length.toLocaleString("ru-RU")} · писем вне цепочек: ${single.toLocaleString("ru-RU")}</div>`
+    + all.slice(0, threadLimit).map((t) => {
+      const c = t.contract && docInfo(t.contract);
+      return `<details class="chain" data-thread="${t.id}" ${openThreads.has(t.id) ? "open" : ""}>
+        <summary class="chain-head">
+          <b>${esc(t.subject || "(без темы)")}</b>
+          <span class="muted">${t.docs.length} ${plural(t.docs.length, "письмо", "письма", "писем")}</span>
+          <span class="thread-meta">${t.first ? t.first.split("-").reverse().join(".") : ""}${t.last && t.last !== t.first ? " — " + t.last.split("-").reverse().join(".") : ""}</span>
+          ${c ? `<span class="type t-contract">${esc(short(c.title || c.filename, 40))}</span>` : ""}
+        </summary>
+        <div class="thread-meta">${esc(t.participants.join(", "))}</div>
+        <ul class="chain-kids">${t.docs.map((id) => { const m = docInfo(id); const l = parentOf(id); return `<li>
+          <span class="muted">${m?.date ? m.date.split("-").reverse().join(".") : "—"}</span>
+          <button class="link" data-open="${id}">${esc(short(letterTitle(m), 70))}</button>
+          <span class="dir">${esc(fromTo(m))}</span>
+          ${l && docInfo(l.to)?.type !== "contract" ? `<span class="muted small">${esc(l.relation)}</span>` : ""}</li>`; }).join("")}</ul>
+      </details>`;
+    }).join("") + (all.length > threadLimit ? `<button class="link kb-more" id="moreThreads">Показать ещё цепочки (${all.length - threadLimit})</button>` : "");
+  $("#moreThreads")?.addEventListener("click", () => { threadLimit += 50; renderKb(); });
+  box.parentElement.scrollTop = scroll;
+};
+$("#kbThreads").addEventListener("toggle", (e) => {
+  const d = e.target.closest("details[data-thread]");
+  if (d) d.open ? openThreads.add(d.dataset.thread) : openThreads.delete(d.dataset.thread);
+}, true);
+$("#kbThreads").addEventListener("click", (e) => { const t = e.target.closest("[data-open]"); if (t) openDetail(t.dataset.open); });
+
 $("#kbChains").addEventListener("click", (e) => {
   const t = e.target.closest("[data-open],[data-cons],[data-risks]"); if (!t) return;
   if (t.dataset.open) openDetail(t.dataset.open);

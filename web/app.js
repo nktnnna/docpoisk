@@ -11,7 +11,8 @@ const state = {
   openDoc: null,        // doc_id, открытый в карточке базы знаний
   canOpen: false,       // сервер умеет открыть файл в программе по умолчанию (настольное приложение)
   graph: null,          // реквизиты и связи документов: {docs, links, types}
-  kbMode: "table",      // таблица или цепочки «договор → доп. соглашения, письма»
+  kbMode: "table",      // таблица, цепочки «договор → доп. соглашения, письма» или переписка
+  kbLimit: 200,         // сколько строк таблицы показано (дальше — «Показать ещё»)
   tab: "chat",
 };
 
@@ -79,7 +80,6 @@ async function refreshDocs() {
   state.docs = docs;
   renderKb();
   refreshGraph();
-  const ul = $("#docs");
   $("#docCount").textContent = docs.length ? `(${docs.length})` : "";
   $("#kbCount").textContent = docs.length ? `(${docs.length})` : "";
   const ids = new Set(docs.map((d) => d.doc_id));
@@ -88,7 +88,18 @@ async function refreshDocs() {
   $("#reindex").hidden = !outdated;
   $("#reindex").textContent = `Обновить индекс старых документов (${outdated}) — поиск станет точнее`;
   if (!docs.length) { ul.innerHTML = `<li class="docs-empty">Пока ничего не загружено</li>`; updateScopeHint(); return; }
-  ul.innerHTML = docs.map((d) => `
+  renderSidebarDocs();
+  updateScopeHint();
+}
+
+// Список слева: при тысячах писем рисуем только первые SIDEBAR_LIMIT подходящих под фильтр
+const SIDEBAR_LIMIT = 150;
+function renderSidebarDocs() {
+  const needle = $("#docFilter").value.trim().toLowerCase();
+  const all = state.docs.filter((d) => !needle || d.filename.toLowerCase().includes(needle));
+  // отмеченные — всегда видны, иначе галочку не снять
+  const shown = [...all.filter((d) => state.selected.has(d.doc_id)), ...all.filter((d) => !state.selected.has(d.doc_id))].slice(0, SIDEBAR_LIMIT);
+  $("#docs").innerHTML = shown.map((d) => `
     <li>
       <label title="${esc(d.filename)}">
         <input type="checkbox" data-id="${d.doc_id}" ${state.selected.has(d.doc_id) ? "checked" : ""}>
@@ -96,9 +107,12 @@ async function refreshDocs() {
       </label>
       <span class="meta">${d.chunks} фр.</span>
       <button class="del" data-id="${d.doc_id}" data-name="${esc(d.filename)}" title="Удалить из базы">✕</button>
-    </li>`).join("");
-  updateScopeHint();
+    </li>`).join("") + (all.length > shown.length
+      ? `<li class="docs-empty">…и ещё ${(all.length - shown.length).toLocaleString("ru-RU")}. Уточните поиск или откройте «Базу знаний».</li>` : "")
+    + (!all.length ? `<li class="docs-empty">Ничего не найдено</li>` : "");
 }
+let docFilterTimer;
+$("#docFilter").addEventListener("input", () => { clearTimeout(docFilterTimer); docFilterTimer = setTimeout(renderSidebarDocs, 150); });
 
 function updateScopeHint() {
   $("#scopeHint").textContent = state.selected.size
@@ -134,11 +148,24 @@ const plural = (n, one, few, many) => { const m10 = n % 10, m100 = n % 100; retu
 let graphBusy = false;
 async function refreshGraph() {
   if (graphBusy) return; graphBusy = true;
-  try { state.graph = await api(`${API.analysis}/graph`); renderKb(); } catch { /* анализ недоступен — таблица работает и без него */ }
+  try { state.graph = await api(`${API.analysis}/graph`); indexGraph(); renderKb(); } catch { /* анализ недоступен — таблица работает и без него */ }
   finally { graphBusy = false; }
 }
-const docInfo = (id) => state.graph?.docs.find((d) => d.doc_id === id);
-const parentOf = (id) => state.graph?.links.find((l) => l.from === id);
+// Индексы по doc_id: при тысячах писем поиск перебором на каждой строке таблицы тормозит
+let graphIndex = { docs: new Map(), parent: new Map(), thread: new Map() };
+function indexGraph() {
+  const g = state.graph;
+  graphIndex = { docs: new Map(g.docs.map((d) => [d.doc_id, d])), parent: new Map(), thread: new Map() };
+  for (const l of g.links) {
+    const cur = graphIndex.parent.get(l.from);
+    // главная связь документа — с договором, иначе первая найденная
+    if (!cur || g.docs && graphIndex.docs.get(l.to)?.type === "contract") graphIndex.parent.set(l.from, l);
+  }
+  for (const t of g.threads || []) for (const id of t.docs) graphIndex.thread.set(id, t);
+}
+const docInfo = (id) => graphIndex.docs.get(id);
+const parentOf = (id) => graphIndex.parent.get(id);
+const threadOf = (id) => graphIndex.thread.get(id);
 const reqText = (m) => !m ? "" : [m.number ? `№ ${m.number}` : "", m.date ? `от ${m.date.split("-").reverse().join(".")}` : ""].filter(Boolean).join(" ");
 
 function showTab(name) {
@@ -152,6 +179,9 @@ function showTab(name) {
   if (name === "admin") window.renderAdmin?.();
 }
 document.querySelectorAll(".tab").forEach((t) => t.addEventListener("click", () => showTab(t.dataset.tab)));
+
+const KB_PAGE = 200;
+$("#kbMore").addEventListener("click", () => { state.kbLimit += KB_PAGE; renderKb(); });
 
 function renderKb() {
   const docs = state.docs;
@@ -180,7 +210,8 @@ function renderKb() {
   const needle = $("#kbFilter").value.trim().toLowerCase();
   const sort = $("#kbSort").value;
   const rows = docs
-    .filter((d) => (!needle || d.filename.toLowerCase().includes(needle) || (docInfo(d.doc_id)?.title || "").toLowerCase().includes(needle))
+    .filter((d) => (!needle || d.filename.toLowerCase().includes(needle) || (docInfo(d.doc_id)?.title || "").toLowerCase().includes(needle)
+        || (docInfo(d.doc_id)?.sender || "").toLowerCase().includes(needle) || (docInfo(d.doc_id)?.recipient || "").toLowerCase().includes(needle))
       && (!fmtSel.value || d.format === fmtSel.value) && (!typeSel.value || docInfo(d.doc_id)?.type === typeSel.value))
     .sort((a, b) => sort === "name" ? a.filename.localeCompare(b.filename, "ru")
       : sort === "size" ? (b.size || 0) - (a.size || 0)
@@ -188,11 +219,17 @@ function renderKb() {
       : sort === "date-asc" ? (a.uploaded_at || "").localeCompare(b.uploaded_at || "")
       : (b.uploaded_at || "").localeCompare(a.uploaded_at || ""));
 
-  $("#kbRows").innerHTML = rows.length ? rows.map((d) => {
+  state.kbRows = rows;
+  const page = rows.slice(0, state.kbLimit);
+  $("#kbMore").hidden = rows.length <= page.length;
+  $("#kbMore").textContent = `Показать ещё (${Math.min(KB_PAGE, rows.length - page.length)} из ${(rows.length - page.length).toLocaleString("ru-RU")})`;
+  $("#kbRows").innerHTML = rows.length ? page.map((d) => {
     const m = docInfo(d.doc_id), link = parentOf(d.doc_id), target = link && docInfo(link.to);
     return `
     <tr data-id="${d.doc_id}" class="${state.openDoc === d.doc_id ? "active" : ""}">
-      <td class="name" title="${esc(d.filename)}"><span class="fmt">${esc(d.format.toUpperCase())}</span> ${esc(d.filename)}${d.outdated ? ` <span class="badge" title="Проиндексирован старой версией — переиндексируйте для точного поиска">старый индекс</span>` : ""}</td>
+      <td class="name" title="${esc(d.filename)}"><span class="fmt">${esc(d.format.toUpperCase())}</span> ${m?.subject
+        ? `${esc(m.subject)}<div class="sub muted">${esc([m.sender, m.recipient].filter(Boolean).map((x) => x.slice(0, 40)).join(" → "))} · ${esc(d.filename)}</div>`
+        : esc(d.filename)}${d.outdated ? ` <span class="badge" title="Проиндексирован старой версией — переиндексируйте для точного поиска">старый индекс</span>` : ""}</td>
       <td>${m ? `<span class="type t-${m.type}">${esc(m.type_name)}</span>` : `<span class="muted">…</span>`}</td>
       <td class="muted">${esc(reqText(m)) || "—"}</td>
       <td class="name link-cell">${target ? `<span class="muted">${esc(link.relation)}</span> ${esc(target.title || target.filename)}` : "—"}</td>
@@ -203,10 +240,13 @@ function renderKb() {
   }).join("")
     : `<tr><td colspan="7" class="kb-empty">${docs.length ? "Ничего не найдено" : "База знаний пуста. Перетащите документы в левую панель."}</td></tr>`;
   $("#kbTable").hidden = state.kbMode !== "table";
+  $("#kbMore").hidden = state.kbMode !== "table" || rows.length <= page.length;
   $("#kbChains").hidden = state.kbMode !== "chains";
+  $("#kbThreads").hidden = state.kbMode !== "threads";
   if (state.kbMode === "chains") window.renderChains?.(rows);
+  if (state.kbMode === "threads") window.renderThreads?.(rows);
 }
-["input", "change"].forEach((ev) => ["#kbFilter", "#kbFormat", "#kbType", "#kbSort"].forEach((id) => $(id).addEventListener(ev, renderKb)));
+["input", "change"].forEach((ev) => ["#kbFilter", "#kbFormat", "#kbType", "#kbSort"].forEach((id) => $(id).addEventListener(ev, () => { state.kbLimit = KB_PAGE; renderKb(); })));
 $("#kbMode").addEventListener("click", (e) => {
   const b = e.target.closest("button[data-mode]"); if (!b) return;
   state.kbMode = b.dataset.mode;
@@ -274,26 +314,56 @@ async function openDetail(id) {
 }
 
 // ---------- загрузка ----------
-const STATUS_RU = { queued: "в очереди", parsing: "читаю текст", embedding: "считаю эмбеддинги", saving: "сохраняю в базу", done: "готово", error: "ошибка" };
+const STATUS_RU = { queued: "в очереди", parsing: "читаю текст", embedding: "считаю эмбеддинги", saving: "сохраняю в базу", done: "готово", skipped: "уже в базе", error: "ошибка", waiting: "жду нейросеть (Ollama не отвечает)" };
 
+// Тысячи писем отправляем пачками (до 40 файлов / 40 МБ): один огромный запрос браузер может не осилить,
+// а так видно, сколько уже отправлено, и сбой одной пачки не теряет остальные
+const BATCH_FILES = 40, BATCH_BYTES = 40 * 1024 * 1024;
 async function uploadFiles(files) {
   if (!files.length) return;
-  const fd = new FormData();
-  for (const f of files) fd.append("files", f, f.name);
-  try {
-    const res = await api(`${API.ingest}/upload`, { method: "POST", body: fd });
-    if (res.rejected.length) alert(res.rejected.map((r) => `${r.filename}: ${r.error}`).join("\n"));
-  } catch (e) { alert("Не удалось загрузить: " + e.message); }
-  pollJobs();
+  const batches = [];
+  let cur = [], size = 0;
+  for (const f of files) {
+    if (cur.length && (cur.length >= BATCH_FILES || size + f.size > BATCH_BYTES)) { batches.push(cur); cur = []; size = 0; }
+    cur.push(f); size += f.size;
+  }
+  if (cur.length) batches.push(cur);
+  const rejected = [];
+  let sent = 0, accepted = 0;
+  const box = $("#uploadProgress");
+  box.hidden = files.length < 2;
+  for (const batch of batches) {
+    box.innerHTML = `Отправляю файлы: ${sent.toLocaleString("ru-RU")} из ${files.length.toLocaleString("ru-RU")}<div class="bar"><i style="width:${Math.round(100 * sent / files.length)}%"></i></div>`;
+    const fd = new FormData();
+    for (const f of batch) fd.append("files", f, f.name);
+    try {
+      const res = await api(`${API.ingest}/upload`, { method: "POST", body: fd });
+      rejected.push(...res.rejected);
+      accepted += res.accepted_count ?? res.accepted.length;
+    } catch (e) { rejected.push(...batch.map((f) => ({ filename: f.name, error: e.message }))); }
+    sent += batch.length;
+    pollJobs();
+  }
+  box.hidden = true;
+  if (rejected.length) alert(`Не принято файлов: ${rejected.length}\n` + rejected.slice(0, 30).map((r) => `${r.filename}: ${r.error}`).join("\n")
+    + (rejected.length > 30 ? `\n…и ещё ${rejected.length - 30}` : ""));
+  else if (files.length > 1) toast(`Принято в обработку: ${accepted.toLocaleString("ru-RU")} документов`);
 }
 
-let pollTimer = null;
+let pollTimer = null, lastFinished = null, docsTimer = null;
 async function pollJobs() {
   clearTimeout(pollTimer);
-  let jobs = [];
-  try { jobs = await api(`${API.ingest}/jobs`); } catch { return; }
-  const recent = jobs.filter((j) => j.status !== "done" || Date.now() - Date.parse(j.finished_at) < 8000);
-  $("#jobs").innerHTML = recent.map((j) => {
+  let sum;
+  try { sum = await api(`${API.ingest}/jobs/summary`); } catch { return; }
+  const c = sum.counts, n = (k) => c[k] || 0;
+  const waiting = n("queued") + n("parsing") + n("embedding") + n("saving") + n("waiting");
+  const finished = n("done") + n("skipped") + n("error");
+  const head = waiting ? `<div class="job-summary">
+      <b>Обработка: ${finished.toLocaleString("ru-RU")} из ${(finished + waiting).toLocaleString("ru-RU")}</b>
+      <div class="bar"><i style="width:${Math.round(100 * finished / Math.max(1, finished + waiting))}%"></i></div>
+      <div class="state">готово ${n("done")}${n("skipped") ? ` · уже были в базе ${n("skipped")}` : ""}${n("error") ? ` · ошибок ${n("error")}` : ""}</div>
+    </div>` : "";
+  const row = (j) => {
     const pct = j.status === "embedding" && j.chunks ? Math.round((100 * j.done) / j.chunks) : j.status === "done" ? 100 : 5;
     const extra = j.status === "embedding" ? ` ${j.done}/${j.chunks}` : j.status === "done" ? ` · ${j.chunks} фрагментов` : "";
     return `<div class="job ${j.status}">
@@ -301,12 +371,19 @@ async function pollJobs() {
       <div class="state">${STATUS_RU[j.status] || j.status}${extra}${j.error ? ": " + esc(j.error) : ""}</div>
       ${j.status !== "error" ? `<div class="bar"><i style="width:${pct}%"></i></div>` : ""}
     </div>`;
-  }).join("");
-  let finishedNow = false;
-  for (const j of jobs) if (j.status === "done" && !state.knownJobs.has(j.job_id)) { state.knownJobs.add(j.job_id); finishedNow = true; }
-  if (finishedNow) refreshDocs();
-  const active = jobs.some((j) => !["done", "error"].includes(j.status));
-  pollTimer = setTimeout(pollJobs, active ? 1000 : 5000);
+  };
+  const recent = sum.recent.filter((j) => Date.now() - Date.parse(j.finished_at) < 8000);
+  const errors = sum.errors.slice(0, waiting ? 3 : 10);
+  $("#jobs").innerHTML = head + sum.active.map(row).join("") + (waiting ? "" : recent.map(row).join(""))
+    + errors.map(row).join("") + (n("error") > errors.length ? `<div class="state muted">…ошибок всего: ${n("error")}</div>` : "")
+    + (!waiting && finished ? `<button class="link small" id="clearJobs">Очистить список</button>` : "");
+  $("#clearJobs")?.addEventListener("click", async () => { await api(`${API.ingest}/jobs/clear`, { method: "POST" }); pollJobs(); });
+  // при массовой загрузке документы готовы каждую секунду — список обновляем не чаще раза в 5 секунд
+  if (sum.last_finished && sum.last_finished !== lastFinished) {
+    lastFinished = sum.last_finished;
+    if (!docsTimer) docsTimer = setTimeout(() => { docsTimer = null; refreshDocs(); }, waiting ? 5000 : 300);
+  }
+  pollTimer = setTimeout(pollJobs, waiting ? 1500 : 5000);
 }
 
 const dz = $("#dropzone");

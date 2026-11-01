@@ -25,7 +25,6 @@ log = logging.getLogger("analysis")
 app = FastAPI(title="Анализ документов")
 auth.protect(app)
 
-META_VERSION = 2   # 2 — номер документа хранится как в тексте (с заглавными буквами)
 _meta_cache: dict[tuple, dict] = {}
 _meta_lock = asyncio.Lock()
 
@@ -90,9 +89,9 @@ async def meta(doc: dict) -> dict:
         return _meta_cache[key]
     cache = Path(config.STORAGE_DIR) / doc_id / "meta.json"
     data = _read_json(cache, {})
-    if data.get("v") != META_VERSION or data.get("uploaded_at") != doc.get("uploaded_at"):
+    if data.get("v") != legal.META_VERSION or data.get("uploaded_at") != doc.get("uploaded_at"):
         data = {**await asyncio.to_thread(legal.analyze_meta, await doc_text(doc)),
-                "v": META_VERSION, "uploaded_at": doc.get("uploaded_at")}
+                "v": legal.META_VERSION, "uploaded_at": doc.get("uploaded_at")}
         _write_json(_dir(doc_id) / "meta.json", data)
     # исправления администратора (консоль: meta <id> set …) важнее автоматического определения
     override = _read_json(Path(config.STORAGE_DIR) / doc_id / "meta_override.json", {})
@@ -136,9 +135,9 @@ async def graph() -> dict:
                 metas[d["doc_id"]] = {"type": "other", "type_name": legal.TYPES["other"], "number": None,
                                       "date": None, "title": "", "parties": [], "refs": []}
     links = legal.build_links(metas, _read_json(_links_file(), {}))
-    return {"docs": [{**d, **{k: v for k, v in metas[d["doc_id"]].items() if k not in ("v", "uploaded_at")}}
-                     for d in docs],
-            "links": links, "types": legal.TYPES}
+    heavy = ("v", "uploaded_at", "letter_refs", "in_reply_to", "refs")   # интерфейсу не нужны — не гоняем мегабайты
+    return {"docs": [{**d, **{k: v for k, v in metas[d["doc_id"]].items() if k not in heavy}} for d in docs],
+            "links": links, "threads": legal.threads(metas, links), "types": legal.TYPES}
 
 
 def _short_label(m: dict) -> str:

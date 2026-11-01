@@ -40,9 +40,10 @@
     <label class="dropzone" id="dropzone">
       <input type="file" id="fileInput" multiple hidden>
       <div class="dz-title">Перетащите документы сюда</div>
-      <div class="dz-sub">или нажмите, чтобы выбрать<br><span id="formats">PDF, DOCX, XLSX, PPTX, TXT…</span></div>
+      <div class="dz-sub">или нажмите, чтобы выбрать · можно тысячи писем сразу, архив ZIP или почтовый ящик .mbox<br><span id="formats">PDF, DOCX, XLSX, PPTX, TXT…</span></div>
     </label>
 
+    <div id="uploadProgress" class="job-summary" hidden></div>
     <div id="jobs" class="jobs"></div>
 
     <div class="section-head">
@@ -51,6 +52,7 @@
     </div>
     <div class="hint muted" id="scopeHint">Поиск по всем документам. Отметьте галочками, чтобы искать только в выбранных.</div>
     <button class="link reindex" id="reindex" hidden></button>
+    <input type="search" id="docFilter" class="doc-filter" placeholder="Найти документ…">
     <ul id="docs" class="docs"></ul>
 
     <div class="status" id="status">Проверяю модели…</div>
@@ -112,6 +114,7 @@
         <div class="seg" id="kbMode">
           <button data-mode="table" class="active">Таблица</button>
           <button data-mode="chains">Связи</button>
+          <button data-mode="threads">Переписка</button>
         </div>
       </div>
       <div class="kb-body">
@@ -121,6 +124,8 @@
             <tbody id="kbRows"></tbody>
           </table>
           <div class="chains" id="kbChains" hidden></div>
+          <div class="chains" id="kbThreads" hidden></div>
+          <button class="link kb-more" id="kbMore" hidden></button>
         </div>
         <aside class="kb-detail" id="kbDetail" hidden></aside>
       </div>

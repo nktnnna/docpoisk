@@ -37,6 +37,9 @@ RELATIONS = {
     "other": "упоминает",
 }
 CONSOLIDATED_MARK = "Сводная редакция подготовлена автоматически"
+EMAIL_MARK = "ПИСЬМО (электронная почта)"     # первая строка текста письма .eml/.msg (см. mail.py)
+LETTER_TYPES = ("letter", "claim")
+META_VERSION = 3   # реквизиты считаются при загрузке; 3 — переписка (тема, стороны, ссылки на письма)
 
 # ---------- даты и номера ----------
 
@@ -90,6 +93,9 @@ def _title_lines(text: str, n: int = 6) -> list[str]:
 def detect_type(text: str) -> str:
     if CONSOLIDATED_MARK in text[:3000]:
         return "consolidated"
+    if text.startswith(EMAIL_MARK):
+        subject = (email_headers(text) or {}).get("Тема", "").lower()
+        return "claim" if "претензи" in subject else "letter"
     title = "\n".join(_title_lines(text)).lower().replace("ё", "е")
     head = text[:3000].lower().replace("ё", "е")
     if "дополнительное соглашение" in title:
@@ -173,6 +179,91 @@ def own_requisites(text: str, doc_type: str) -> tuple[str | None, str | None]:
     return (num.strip(".-/ ") if num else None), date
 
 
+# ---------- письма и переписка ----------
+
+_EMAIL_HEAD = re.compile(r"^(От|Кому|Копия|Дата|Тема|Message-ID|В ответ на|Цепочка|Вложения):[ \t]?(.*)$", re.MULTILINE)
+_MSGID = re.compile(r"<[^<>\s]+>")
+_EMAIL_ADDR = re.compile(r"[\w.+-]+@([\w-]+\.)+\w+")
+_RE_PREFIX = re.compile(r"^\s*((re|fw|fwd|ответ|отв|пересл|aw|wg)\s*(\[\d+\]|\(\d+\))?\s*:\s*)+", re.IGNORECASE)
+_LREF_A = re.compile(rf"(?:исх|вх)\w*\.?\s*{NUM}(?:\s*от\s*({DATE}))?", re.IGNORECASE)
+_LREF_B = re.compile(rf"(?:письм|запрос|обращени|уведомлени|претензи|ответ)\w*(?:\s+[а-яё\-]+){{0,3}}?\s*"
+                     rf"(?:от\s*({DATE})\s*(?:г\.?)?\s*)?{NUM}(?:\s*от\s*({DATE}))?", re.IGNORECASE)
+_REPLY_CUE = re.compile(r"в\s+ответ|ответ\s+на|на\s+ваш|по\s+вашему|на\s+(?:исх|вх)", re.IGNORECASE)
+_GENERIC_SUBJECTS = {"", "без темы", "письмо", "информация", "вопрос", "документы", "запрос", "уведомление"}
+
+
+def email_headers(text: str) -> dict | None:
+    if not text.startswith(EMAIL_MARK):
+        return None
+    return {k: v.strip() for k, v in _EMAIL_HEAD.findall(text.split("\n\n", 1)[0])}
+
+
+def norm_subject(subject: str) -> str:
+    """«RE: Fwd: О сроках поставки!» → «о сроках поставки» — чтобы письма одной переписки совпадали по теме."""
+    s = _RE_PREFIX.sub("", subject or "").lower().replace("ё", "е")
+    return re.sub(r"[^\w ]+", " ", re.sub(r"\s+", " ", s)).strip()
+
+
+def _participants(*parts: str) -> list[str]:
+    """Кто участвует: организации («ооо «альфа»»), почтовые домены (alfa.ru) — для сравнения сторон писем."""
+    out = set()
+    for part in parts:
+        for m in ORG.finditer(part or ""):
+            out.add(re.sub(r"\s+", " ", m.group(0)))
+        for m in _EMAIL_ADDR.finditer(part or ""):
+            domain = m.group(0).split("@")[1].lower()
+            if domain not in ("gmail.com", "mail.ru", "yandex.ru", "ya.ru", "bk.ru", "list.ru", "inbox.ru",
+                              "outlook.com", "hotmail.com", "icloud.com", "rambler.ru"):
+                out.add(domain)
+            else:
+                out.add(m.group(0).lower())
+    return sorted(out)
+
+
+def letter_refs(text: str, own_num: str | None, own_date: str | None) -> list[dict]:
+    """Ссылки на другие письма: «на ваш исх. № 45 от 05.03.2024», «в ответ на письмо № 17»."""
+    body = text.split("\n\n", 1)[1] if text.startswith(EMAIL_MARK) and "\n\n" in text else text
+    own = norm_num(own_num) if own_num else None
+    found: dict[tuple[str, str | None], dict] = {}
+    for rx, num_group, date_groups in ((_LREF_A, 1, (2,)), (_LREF_B, 2, (1, 3))):
+        for m in rx.finditer(body):
+            num = norm_num(m.group(num_group))
+            date = next((parse_date(m.group(g)) for g in date_groups if m.group(g)), None)
+            if own and num == own and (not date or date == own_date):
+                continue                                   # реквизиты самого письма
+            ctx = body[max(0, m.start() - 40):m.end()]
+            item = found.setdefault((num, date), {"num": num, "date": date, "reply": False,
+                                                 "text": re.sub(r"\s+", " ", m.group(0))[:120]})
+            item["reply"] = item["reply"] or bool(_REPLY_CUE.search(ctx))
+    dated = {n for n, d in found if d}
+    return [v for (n, d), v in found.items() if d or n not in dated]
+
+
+def letter_meta(text: str, doc_type: str, num: str | None, date: str | None) -> dict:
+    """Реквизиты письма: тема, отправитель, получатель, почтовые идентификаторы, ссылки на другие письма."""
+    head = email_headers(text)
+    if head is not None:
+        sender, recipient = head.get("От", ""), ", ".join(x for x in (head.get("Кому"), head.get("Копия")) if x)
+        subject = head.get("Тема", "")
+        if not date:
+            date = parse_date((head.get("Дата") or "")[:10])
+        message_id = next(iter(_MSGID.findall(head.get("Message-ID", ""))), "")
+        replies = _MSGID.findall(head.get("В ответ на", "")) + _MSGID.findall(head.get("Цепочка", ""))
+    else:
+        lines = _title_lines(text, 15)
+        recipient = next((x for x in lines if re.search(r"директору|руководителю|начальнику|кому|в адрес|^в\s+(ООО|АО|ПАО)",
+                                                        x, re.IGNORECASE)), "")
+        sender = next((x for x in lines[:4] if ORG.search(x)), "") or \
+            next((m.group(0) for m in list(ORG.finditer(text[-800:]))[-1:]), "")
+        subject = next((x for x in lines if re.match(r"(о|об|по поводу|касательно|тема\s*:|re\s*:)\s", x, re.IGNORECASE)
+                        and len(x) < 200), "")
+        subject = re.sub(r"^тема\s*:\s*", "", subject, flags=re.IGNORECASE)
+        message_id, replies = "", []
+    return {"date": date, "subject": subject[:200], "sender": sender[:200], "recipient": recipient[:300],
+            "participants": _participants(sender, recipient), "message_id": message_id,
+            "in_reply_to": list(dict.fromkeys(replies)), "letter_refs": letter_refs(text, num, date)}
+
+
 def analyze_meta(text: str) -> dict:
     doc_type = detect_type(text)
     num, date = own_requisites(text, doc_type)
@@ -181,8 +272,13 @@ def analyze_meta(text: str) -> dict:
         refs = [r for r in refs if r["num"] != norm_num(num)]
     # «Лист: График» — служебная строка Excel, а не заголовок
     title = next((x for x in _title_lines(text, 4) if len(x) > 3 and not x.startswith("Лист:")), "")[:150]
-    return {"type": doc_type, "type_name": TYPES[doc_type], "number": num, "date": date,
+    meta = {"type": doc_type, "type_name": TYPES[doc_type], "number": num, "date": date,
             "title": title, "parties": parties(text), "refs": refs}
+    if doc_type in LETTER_TYPES:
+        meta.update(letter_meta(text, doc_type, num, date))
+        if text.startswith(EMAIL_MARK):
+            meta["title"] = meta["subject"] or "(без темы)"
+    return meta
 
 
 def doc_label(meta: dict) -> str:
@@ -191,6 +287,11 @@ def doc_label(meta: dict) -> str:
     if title.isupper():   # «ДОГОВОР ПОСТАВКИ № П-207» → «Договор поставки № П-207» (номер не трогаем)
         words = title.split()
         title = " ".join(w.capitalize() if i == 0 else (w.lower() if w.isalpha() else w) for i, w in enumerate(words))
+    if meta["type"] in LETTER_TYPES and meta.get("subject"):
+        out = meta["type_name"] + (f" № {meta['number']}" if meta.get("number") else "")
+        if meta.get("date"):
+            out += f" от {ru_date(meta['date'])}"
+        return f"{out} «{meta['subject'][:80]}»"
     if meta["type"] in ("other", "contract") and title and (meta["type"] == "other" or "№" in title):
         out = title                  # в заголовке договора есть вид: «Договор подряда № 15/2024»
     else:
@@ -219,6 +320,11 @@ def build_links(metas: dict[str, dict], manual: dict) -> list[dict]:
             for c in cands:
                 links.setdefault((doc_id, c), {"from": doc_id, "to": c, "relation": RELATIONS[m["type"]],
                                                "auto": True, "evidence": ref["text"]})
+    _letter_links(metas, links)
+    for att, letter in manual.get("attach", []):       # вложения писем (.eml/.msg) — к своему письму
+        if att in metas and letter in metas:
+            links.setdefault((att, letter), {"from": att, "to": letter, "relation": "вложение к", "auto": True,
+                                             "evidence": "вложение письма"})
     removed = {tuple(x) for x in manual.get("remove", [])}
     for key in list(links):
         if key in removed:
@@ -228,6 +334,101 @@ def build_links(metas: dict[str, dict], manual: dict) -> list[dict]:
             links[(a, b)] = {"from": a, "to": b, "relation": RELATIONS[metas[a]["type"]], "auto": False,
                              "evidence": "привязано вручную"}
     return list(links.values())
+
+
+def _letter_links(metas: dict[str, dict], links: dict) -> None:
+    """Письмо → письмо: ответ по почтовым заголовкам, ссылка «на ваш исх. № …», общая тема переписки."""
+    letters = {d: m for d, m in metas.items() if m["type"] in LETTER_TYPES}
+    by_msgid = {m["message_id"]: d for d, m in letters.items() if m.get("message_id")}
+    by_num: dict[str, list[str]] = {}
+    for d, m in letters.items():
+        if m.get("number"):
+            by_num.setdefault(norm_num(m["number"]), []).append(d)
+
+    def add(a: str, b: str, relation: str, evidence: str) -> None:
+        if a != b:
+            links.setdefault((a, b), {"from": a, "to": b, "relation": relation, "auto": True, "evidence": evidence})
+
+    def overlap(a: str, b: str) -> bool:
+        lower = lambda d: {p.lower() for p in letters[d].get("participants") or []}
+        return bool(lower(a) & lower(b))
+
+    for d, m in letters.items():
+        for mid in m.get("in_reply_to") or []:
+            if mid in by_msgid:
+                add(d, by_msgid[mid], "ответ на", "почта: ответ на это письмо")
+        for r in m.get("letter_refs") or []:
+            cands = [c for c in by_num.get(r["num"], []) if c != d]
+            if r["date"]:
+                cands = [c for c in cands if letters[c].get("date") == r["date"]]
+            elif len(cands) > 1:   # без даты один номер бывает у писем разных организаций — нужны те же стороны
+                cands = [c for c in cands if overlap(c, d)]
+            if len(cands) == 1:
+                add(d, cands[0], "ответ на" if r["reply"] else "ссылается на письмо", r["text"])
+
+    # «Re:/Fwd:/Ответ:» + та же тема + общие участники — продолжение переписки (если письмо не связано иначе).
+    # Письмо без такой приставки с той же темой — начало новой переписки: на тестовой выгрузке
+    # правило «просто одна тема» склеивало разные переписки между теми же компаниями.
+    has_link = {a for (a, b) in links if a in letters and b in letters}
+    threads: dict[str, list[str]] = {}
+    for d, m in letters.items():
+        subj = norm_subject(m.get("subject") or "")
+        if len(subj) >= 6 and subj not in _GENERIC_SUBJECTS:
+            threads.setdefault(subj, []).append(d)
+    for subj, ids in threads.items():
+        ids.sort(key=lambda d: (letters[d].get("date") or "", d))
+        for i, d in enumerate(ids[1:], start=1):
+            if d in has_link or not _RE_PREFIX.match(letters[d].get("subject") or ""):
+                continue
+            prev = next((p for p in reversed(ids[:i]) if overlap(p, d) and _close(letters[p], letters[d])), None)
+            if prev:
+                add(d, prev, "та же переписка", f"тема «{letters[d].get('subject', '')[:60]}»")
+
+
+THREAD_GAP_DAYS = 45   # одна тема с теми же сторонами через полгода — скорее новая переписка
+
+
+def _close(a: dict, b: dict) -> bool:
+    """Письма с одинаковой темой — одна переписка, только если между ними не больше THREAD_GAP_DAYS."""
+    from datetime import date
+
+    if not a.get("date") or not b.get("date"):
+        return True
+    return abs((date.fromisoformat(b["date"]) - date.fromisoformat(a["date"])).days) <= THREAD_GAP_DAYS
+
+
+def threads(metas: dict[str, dict], links: list[dict]) -> list[dict]:
+    """Цепочки переписки: письма, связанные между собой (ответы, ссылки, общая тема), по датам."""
+    letters = {d for d, m in metas.items() if m["type"] in LETTER_TYPES}
+    parent = {d: d for d in letters}
+
+    def find(x: str) -> str:
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for l in links:
+        if l["from"] in letters and l["to"] in letters:
+            parent[find(l["from"])] = find(l["to"])
+    groups: dict[str, list[str]] = {}
+    for d in letters:
+        groups.setdefault(find(d), []).append(d)
+    contract_of = {l["from"]: l["to"] for l in links if metas.get(l["to"], {}).get("type") == "contract"}
+    out = []
+    for ids in groups.values():
+        if len(ids) < 2:
+            continue
+        ids.sort(key=lambda d: (metas[d].get("date") or "", d))
+        subject = next((metas[d].get("subject") for d in ids if metas[d].get("subject")), "") or metas[ids[0]].get("title", "")
+        people = [p for d in ids for p in metas[d].get("participants") or []]
+        dates = [metas[d]["date"] for d in ids if metas[d].get("date")]
+        contract = next((contract_of[d] for d in ids if d in contract_of), None)
+        out.append({"id": ids[0], "subject": _RE_PREFIX.sub("", subject)[:150], "docs": ids,
+                    "participants": sorted(set(people), key=people.count, reverse=True)[:5],
+                    "first": min(dates) if dates else None, "last": max(dates) if dates else None,
+                    "contract": contract})
+    return sorted(out, key=lambda t: t["last"] or "", reverse=True)
 
 
 # ---------- пункты договора ----------

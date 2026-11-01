@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import re
@@ -15,12 +16,13 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from . import auth, config, legal, ollama, store
+from . import auth, config, legal, mail, ollama, store
 from .chunking import chunk_pages, embed_text, headings, normalize
-from .parsing import SUPPORTED, extract_pages, unsupported_reason
+from .parsing import PARSERS, SUPPORTED, extract_pages, unsupported_reason
 
 log = logging.getLogger("ingest")
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -30,7 +32,9 @@ auth.protect(app)
 
 # Задачи индексации (в памяти: после перезапуска история очищается, сами документы остаются в базе)
 jobs: dict[str, dict] = {}
-_queue: asyncio.Queue[tuple[str, str, bytes]] | None = None
+# В очереди — путь к файлу на диске, а не байты: 3000 писем не держим в памяти
+_queue: asyncio.Queue[tuple[str, str, Path, bool]] | None = None
+_links_lock = asyncio.Lock()
 _worker_task: asyncio.Task | None = None
 
 
@@ -43,10 +47,28 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _incoming() -> Path:
+    path = Path(config.STORAGE_DIR) / "_incoming"
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+async def _previous(doc_id: str) -> dict | None:
+    """Первый фрагмент этого документа, если он уже был загружен."""
+    return (await store.get_chunks([(doc_id, 0)])).get((doc_id, 0))
+
+
 async def _index(job_id: str, filename: str, data: bytes) -> None:
     job = jobs[job_id]
     doc_id = hashlib.sha256(data).hexdigest()[:16]
     job.update(status="parsing", doc_id=doc_id)
+    previous = await _previous(doc_id)
+    # тот же файл уже в базе текущей версией индекса — повторная загрузка той же выгрузки почты
+    # не тратит время на эмбеддинги
+    if (not job.get("force") and previous and previous.get("v") == store.INDEX_VERSION
+            and (Path(config.STORAGE_DIR) / doc_id / filename).exists()):
+        job["status"] = "skipped"
+        return
     pages = await asyncio.to_thread(extract_pages, filename, data)
     if not pages:
         raise ValueError(
@@ -68,38 +90,140 @@ async def _index(job_id: str, filename: str, data: bytes) -> None:
         job["done"] = len(vectors)
 
     job["status"] = "saving"
+    uploaded = _now()
     await store.ensure_collection(len(vectors[0]))
-    await store.delete_doc(doc_id)  # повторная загрузка того же файла заменяет старую версию
-    await store.upsert(doc_id, filename, chunks, vectors, _now(), doc)
+    if previous:
+        # повторная загрузка заменяет старую версию; для нового документа удалять нечего, а удаление
+        # по фильтру во встроенной базе просматривает всю коллекцию — на тысячах писем это заметно
+        await store.delete_doc(doc_id)
+    await store.upsert(doc_id, filename, chunks, vectors, uploaded, doc)
 
     dest = Path(config.STORAGE_DIR) / doc_id
     dest.mkdir(parents=True, exist_ok=True)
     (dest / filename).write_bytes(data)
+    # реквизиты считаются один раз здесь — «База знаний» и связи не перечитывают тысячи файлов
+    (dest / "meta.json").write_text(json.dumps({**meta, "v": legal.META_VERSION, "uploaded_at": uploaded},
+                                               ensure_ascii=False), encoding="utf-8")
+
+
+async def _index_patiently(job_id: str, filename: str, data: bytes) -> None:
+    """Если нейросеть недоступна (Ollama не запущена или перезапускается), задание ждёт и повторяется,
+    а не падает: иначе очередь из тысяч писем за минуту превращалась в тысячи ошибок."""
+    delay = 5
+    while True:
+        try:
+            return await _index(job_id, filename, data)
+        except (httpx.ConnectError, httpx.ConnectTimeout, httpx.RemoteProtocolError):
+            jobs[job_id]["status"] = "waiting"
+            log.warning("Ollama недоступна — жду %s с и повторяю %s", delay, filename)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 60)
 
 
 async def _worker() -> None:
     assert _queue is not None
     # Один воркер: файлы индексируются по очереди, чтобы не перегружать ноутбук
     while True:
-        job_id, filename, data = await _queue.get()
+        job_id, filename, path, temporary = await _queue.get()
         try:
-            await _index(job_id, filename, data)
-            jobs[job_id].update(status="done", finished_at=_now())
+            await _index_patiently(job_id, filename, await asyncio.to_thread(path.read_bytes))
+            if jobs[job_id]["status"] != "skipped":
+                jobs[job_id]["status"] = "done"
+            jobs[job_id]["finished_at"] = _now()
             log.info("Проиндексирован %s (%s чанков)", filename, jobs[job_id].get("chunks"))
         except Exception as e:
             log.exception("Ошибка индексации %s", filename)
             jobs[job_id].update(status="error", error=str(e), finished_at=_now())
         finally:
+            if temporary:
+                path.unlink(missing_ok=True)
             _queue.task_done()
 
 
-def _enqueue(filename: str, data: bytes) -> dict:
+def _enqueue_path(filename: str, path: Path, temporary: bool, force: bool = False) -> dict:
     filename = _safe_name(filename)
     job_id = hashlib.sha1(f"{filename}{_now()}{len(jobs)}".encode()).hexdigest()[:12]
-    jobs[job_id] = {"job_id": job_id, "filename": filename, "status": "queued", "created_at": _now()}
+    jobs[job_id] = {"job_id": job_id, "filename": filename, "status": "queued", "created_at": _now(), "force": force}
     _ensure_worker()
-    _queue.put_nowait((job_id, filename, data))
+    _queue.put_nowait((job_id, filename, path, temporary))
     return jobs[job_id]
+
+
+def _enqueue(filename: str, data: bytes, force: bool = True) -> dict:
+    """Поставить в очередь файл из памяти (сводная редакция, переиндексация — заново, даже если уже в базе)."""
+    tmp = _incoming() / f"{hashlib.sha1(data).hexdigest()[:12]}_{_safe_name(filename)}"
+    tmp.write_bytes(data)
+    return _enqueue_path(filename, tmp, temporary=True, force=force)
+
+
+def _expand(filename: str, path: Path, temporary: bool, depth: int = 0) -> tuple[list[tuple], list[dict], list]:
+    """Файл → что индексировать. Архив и почтовый ящик раскладываются на отдельные файлы,
+    у письма .eml/.msg вложения становятся отдельными документами, привязанными к письму.
+
+    Работает в отдельном потоке (распаковка тысяч писем не должна тормозить приложение), поэтому
+    сам в очередь ничего не ставит: возвращает (файлы [(имя, путь, временный)], отклонённые,
+    пары «вложение → письмо» по doc_id), а в очередь их ставит основной цикл — см. _enqueue_all."""
+    ext = Path(filename).suffix.lower()
+    items, rejected, attach = [], [], []
+    try:
+        if ext in (".zip", ".mbox") and depth < 3:
+            entries = mail.unzip(str(path)) if ext == ".zip" else \
+                [(f"{Path(filename).stem}_{i:05d}.eml", raw) for i, raw in enumerate(mail.split_mbox(str(path)), start=1)]
+            if temporary:
+                path.unlink(missing_ok=True)
+            for name, raw in entries:
+                reason = unsupported_reason(name)
+                if reason:
+                    rejected.append({"filename": name, "error": reason})
+                    continue
+                tmp = _incoming() / f"{hashlib.sha1(raw).hexdigest()[:12]}_{_safe_name(name)}"
+                tmp.write_bytes(raw)
+                i, r, a = _expand(name, tmp, True, depth + 1)
+                items += i
+                rejected += r
+                attach += a
+            return items, rejected, attach
+        items.append((filename, path, temporary))
+        if ext in (".eml", ".msg"):
+            raw = path.read_bytes()
+            try:
+                _, atts = mail.parse_eml(raw) if ext == ".eml" else mail.parse_msg(raw)
+            except Exception:
+                atts = []
+            letter_id = hashlib.sha256(raw).hexdigest()[:16]
+            for name, data in atts:
+                if Path(name).suffix.lower() in PARSERS and Path(name).suffix.lower() not in (".eml", ".msg"):
+                    att_name = f"{Path(filename).stem} — {name}"
+                    tmp = _incoming() / f"{hashlib.sha1(data).hexdigest()[:12]}_{_safe_name(att_name)}"
+                    tmp.write_bytes(data)
+                    items.append((att_name, tmp, True))
+                    attach.append([hashlib.sha256(data).hexdigest()[:16], letter_id])
+    except Exception as e:
+        log.exception("Не удалось разобрать %s", filename)
+        rejected.append({"filename": filename, "error": f"не удалось открыть: {e}"})
+    return items, rejected, attach
+
+
+async def _enqueue_all(filename: str, path: Path, temporary: bool) -> tuple[list[dict], list[dict]]:
+    items, rejected, attach = await asyncio.to_thread(_expand, filename, path, temporary)
+    await _remember_attachments(attach)
+    return [_enqueue_path(n, p, t) for n, p, t in items], rejected
+
+
+async def _remember_attachments(pairs: list) -> None:
+    """Связи «вложение → письмо» — в тот же файл, где ручные связи (их читает раздел анализа)."""
+    if not pairs:
+        return
+    async with _links_lock:
+        path = Path(config.STORAGE_DIR) / "links.json"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            data = {}
+        known = {tuple(x) for x in data.get("attach", [])}
+        data["attach"] = data.get("attach", []) + [p for p in pairs if tuple(p) not in known]
+        path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
 
 
 def _ensure_worker() -> None:
@@ -144,14 +268,23 @@ async def pull_models():
 async def upload(files: list[UploadFile] = File(...)):
     accepted, rejected = [], []
     for f in files:
-        reason = unsupported_reason(f.filename or "")
+        name = f.filename or "file"
+        reason = unsupported_reason(name)
         if reason:
-            rejected.append({"filename": f.filename, "error": reason})
+            rejected.append({"filename": name, "error": reason})
             continue
-        accepted.append(_enqueue(f.filename or "file", await f.read()))
+        # сразу на диск, по частям: большие архивы и почтовые ящики не держим в памяти
+        tmp = _incoming() / f"{hashlib.sha1(f'{name}{_now()}{len(jobs)}'.encode()).hexdigest()[:12]}_{_safe_name(name)}"
+        with open(tmp, "wb") as out:
+            while chunk := await f.read(1024 * 1024):
+                out.write(chunk)
+        a, r = await _enqueue_all(name, tmp, True)
+        accepted += a
+        rejected += r
     if accepted:
-        auth.audit("Загрузка документов", ", ".join(j["filename"] for j in accepted))
-    return {"accepted": accepted, "rejected": rejected}
+        names = ", ".join(j["filename"] for j in accepted[:20])
+        auth.audit("Загрузка документов", f"{len(accepted)} файл(ов): {names}{' …' if len(accepted) > 20 else ''}")
+    return {"accepted": accepted[:200], "accepted_count": len(accepted), "rejected": rejected}
 
 
 @app.post("/inbox/scan")
@@ -161,10 +294,10 @@ async def scan_inbox():
     inbox.mkdir(parents=True, exist_ok=True)
     queued = []
     for path in sorted(inbox.rglob("*")):
-        if path.is_file() and path.suffix.lower() in SUPPORTED:
-            queued.append(_enqueue(path.name, path.read_bytes()))
+        if path.is_file() and path.suffix.lower() in SUPPORTED and not path.name.startswith("."):
+            queued += (await _enqueue_all(path.name, path, False))[0]   # исходники в inbox не трогаем
     auth.audit("Загрузка из папки inbox", f"{len(queued)} файлов")
-    return {"queued": queued}
+    return {"queued": queued[:200], "queued_count": len(queued)}
 
 
 @app.post("/reindex")
@@ -188,6 +321,30 @@ async def reindex(only_outdated: bool = True, doc_id: str | None = None):
 @app.get("/jobs")
 async def list_jobs():
     return sorted(jobs.values(), key=lambda j: j["created_at"], reverse=True)[:200]
+
+
+@app.get("/jobs/summary")
+async def jobs_summary():
+    """Общий прогресс большой загрузки (тысячи писем): сколько в очереди, готово, пропущено, с ошибкой —
+    и только те задания, которые стоит показать (идущие сейчас и ошибки), а не все 3000."""
+    counts: dict[str, int] = {}
+    for j in jobs.values():
+        counts[j["status"]] = counts.get(j["status"], 0) + 1
+    active = [j for j in jobs.values() if j["status"] in ("parsing", "embedding", "saving", "waiting")]
+    errors = sorted((j for j in jobs.values() if j["status"] == "error"), key=lambda j: j.get("finished_at", ""),
+                    reverse=True)
+    recent = sorted((j for j in jobs.values() if j["status"] in ("done", "skipped")),
+                    key=lambda j: j.get("finished_at", ""), reverse=True)
+    return {"counts": counts, "total": len(jobs), "active": active, "errors": errors[:50], "recent": recent[:5],
+            "last_finished": recent[0]["finished_at"] if recent else None}
+
+
+@app.post("/jobs/clear")
+async def clear_jobs():
+    """Убрать завершённые задания из списка (сами документы остаются в базе)."""
+    for k in [k for k, j in jobs.items() if j["status"] in ("done", "skipped", "error")]:
+        del jobs[k]
+    return {"ok": True}
 
 
 def _stored_file(doc: dict) -> Path | None:

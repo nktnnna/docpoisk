@@ -9,3 +9,4 @@ data/
 # результаты прогона сценариев qa/
 qa/corpus/
 qa/results*.json
+qa/letters/

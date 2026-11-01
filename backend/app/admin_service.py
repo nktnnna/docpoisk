@@ -348,10 +348,10 @@ async def run_command(line: str) -> str:
             an.set_override(d["doc_id"], fields)
             auth.audit("Консоль: исправлены реквизиты", f"{d['filename']}: {fields}")
             args = args[:1]
-        _, docs = await _graph_docs()
-        m = docs[d["doc_id"]]
+        m = await an.meta(d)
         return json.dumps({k: m.get(k) for k in ("type", "type_name", "number", "date", "title", "parties", "refs",
-                                                  "overridden")}, ensure_ascii=False, indent=1)
+                                                  "subject", "sender", "recipient", "letter_refs", "overridden")
+                           if m.get(k) not in (None, "", [])}, ensure_ascii=False, indent=1)
 
     if cmd == "links":
         g, docs = await _graph_docs()

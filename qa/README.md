@@ -37,3 +37,18 @@ cd backend && DATA_DIR=/tmp/docsearch-qa LLM_MODEL=qwen2.5:7b ../.venv/bin/pytho
 ```
 
 Прогон занимает 15–40 минут, в зависимости от модели и компьютера. Модель задаётся переменными `LLM_MODEL` и `EMBED_MODEL` при запуске экземпляра, поэтому так удобно сравнивать модели между собой. Модель должна быть скачана: `ollama pull qwen2.5:7b`. Подробности каждого ответа (вопрос, переформулировка, фрагменты, ответ) сохраняются в `results.json`.
+
+## Письма: нагрузка и точность связей
+
+```bash
+.venv/bin/python qa/make_letters.py qa/letters
+cd backend && DATA_DIR=/tmp/docsearch-letters ../.venv/bin/python -m uvicorn app.main:app --port 8780 &
+cd .. && .venv/bin/python qa/load_letters.py qa/letters http://127.0.0.1:8780
+.venv/bin/python qa/evaluate_letters.py qa/letters 8780
+```
+
+Результат на тестовом сервере без видеокарты (4 ядра):
+- 2682 документа (2582 письма и 100 вложений) проиндексированы за 26 минут без ошибок;
+- все 1794 найденные связи между письмами верны (100 %);
+- 773 из 780 переписок собраны в цепочку целиком;
+- «База знаний» со всеми связями открывается за 0,3–0,5 с.
