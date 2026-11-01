@@ -206,8 +206,9 @@ def _letter_risks(clauses: list[Clause], side: str | None) -> list[dict]:
 # ---------- нейросеть ----------
 
 LLM_SYSTEM = """Ты — опытный юрист. Критически проверяешь {what} на риски{side}.
-Ищи: односторонние права другой стороны, размытые формулировки, невыгодные или нереальные сроки, неограниченную ответственность, скрытые обязательства и расходы, противоречия между пунктами, отсутствие важных гарантий.
-Не выдумывай: каждый риск должен опираться на конкретный пункт из списка. Если в пункте рисков нет — не упоминай его.
+Обращай внимание на: односторонние права другой стороны, неясные условия, невыгодные или нереальные сроки, неограниченную ответственность, обязательства и расходы, которые легко упустить, противоречия между пунктами.
+Каждый риск опиши конкретно, своими словами: что именно написано в пункте и чем это грозит. Не пиши общих слов вроде «размытые формулировки» без объяснения.
+Не утверждай, что чего-то «нет» или «не указано», если это есть в тексте пункта. Если в пункте рисков нет — не упоминай его.
 Отвечай только JSON, значения — по-русски."""
 
 LLM_USER = """{items}
@@ -253,11 +254,45 @@ async def llm_risks(batch: list[Clause], doc_type: str, side: str | None) -> lis
         text = str(r.get("risk") or "").strip()
         if num not in known or len(text) < 5:
             continue          # нейросеть сослалась на несуществующий пункт — не доверяем
+        if _generic(text) or _contradicted(text, known[num].text):
+            continue          # общие слова или «нет X», когда X в пункте есть (так ошибалась модель на 3B)
         level = str(r.get("level") or "").lower()
-        level = next((lv for lv in LEVELS if lv[:4] in level), "средний")
-        result.append(_risk(num, known[num].text[:300], text, level, str(r.get("for_whom") or "")[:60],
+        # уровень от нейросети не выше «среднего»: на тестах 3B ставила «высокий» почти всему —
+        # окончательную оценку даёт юрист, а высокий уровень остаётся за проверенными правилами
+        level = "низкий" if "низ" in level else "средний"
+        whom = str(r.get("for_whom") or "")[:60]
+        if side and whom and side.lower()[:5] not in whom.lower():
+            level = "низкий"          # риск для другой стороны, а мы смотрим со своей
+        result.append(_risk(num, known[num].text[:300], text, level, whom,
                             str(r.get("recommendation") or "")[:400], "нейросеть"))
     return result
+
+
+_GENERIC = {"размыт", "формулировк", "невыгодн", "нереальн", "срок", "скрыт", "обязательств", "расход", "односторон",
+            "прав", "неограничен", "ответствен", "противореч", "пункт", "отсутств", "важн", "гарант", "услов"}
+
+
+def _words(text: str) -> set[str]:
+    from .lexical import tokenize
+
+    return {t for t in tokenize(text) if not t[0].isdigit()}
+
+
+def _generic(risk: str) -> bool:
+    """«Размытые формулировки», «невыгодные сроки» — категории из промпта без объяснения."""
+    words = _words(risk)
+    return len(words) < 3 or len(words - _GENERIC) < 2
+
+
+def _contradicted(risk: str, clause: str) -> bool:
+    """«Отсутствие конкретного суда…», когда в пункте написано, какой суд."""
+    m = re.match(r"\s*(?:отсутств\w*|нет|не указан\w*|не определ\w*|не установлен\w*|не предусмотрен\w*)\s+(.+)",
+                 risk, re.IGNORECASE)
+    if not m:
+        return False
+    claim = re.split(r",|\s(?:что|может|могут|котор\w*|из-за|поэтому)\s", m.group(1))[0]   # без «…, что может привести к…»
+    claimed = _words(claim) - {"конкретн", "четк", "ясн", "точн", "услов"}
+    return bool(claimed) and len(claimed & _words(clause)) / len(claimed) >= 0.5
 
 
 def _similar(a: dict, b: dict) -> bool:
@@ -271,6 +306,10 @@ async def analyze(clauses: list[Clause], roles: list[str], doc_type: str, side: 
                   use_llm: bool = True) -> AsyncIterator[dict]:
     """Поток событий: {"type":"risk"}, {"type":"progress"}; правила — сразу, нейросеть — по пачкам."""
     found = rule_risks(clauses, roles, doc_type, side)
+    if side:
+        for r in found:   # риск другой стороны (её высокая неустойка) для нас скорее плюс — не поднимаем тревогу
+            if r["for_whom"] and "обе" not in r["for_whom"] and side.lower()[:5] not in r["for_whom"].lower():
+                r["level"] = "низкий"
     for r in found:
         yield {"type": "risk", "risk": r}
     if not use_llm:

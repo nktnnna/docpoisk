@@ -137,3 +137,16 @@ def test_exports():
     xlsx = risks_xlsx([{"filename": "Договор.docx", "created_at": "2024-01-01", "risks": rule_risks(
         parse_clauses(CONTRACT), ["Заказчик", "Подрядчик"], "contract", None)}])
     assert xlsx[:2] == b"PK"
+
+
+def test_llm_risk_filters():
+    from app.risks import _contradicted, _generic
+
+    assert _generic("размытые формулировки") and _generic("невыгодные или нереальные сроки")
+    assert not _generic("Ответственность за устранение недостатков не ограничена, что дорого для Заказчика")
+    # «нет X», когда X в пункте есть, — ошибка модели
+    assert _contradicted("Отсутствие конкретного суда для разрешения споров",
+                         "Споры рассматриваются в Арбитражном суде Московской области.")
+    # настоящий риск: ограничения размера неустойки в пункте действительно нет
+    assert not _contradicted("Нет ограничения размера неустойки",
+                             "Подрядчик уплачивает неустойку 0,3 % за каждый день просрочки.")

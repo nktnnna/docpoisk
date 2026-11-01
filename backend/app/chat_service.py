@@ -513,9 +513,25 @@ def verify(answer: str, passages: list[dict]) -> dict:
     """
     # «[4.5]», «[п. 5.3]» — модель путает номер пункта с номером фрагмента: убираем, ссылку поставим сами
     answer = re.sub(r"\s*\[(?:п\.\s*)?\d+(?:\.\d+)+\]", "", answer)
+    # «Ответ: …», «7.1. Гарантийный срок…», «1. Поставщик…» — модель копирует (а то и выдумывает) нумерацию пунктов
+    answer = re.sub(r"^\s*(?:\[\d+(?:\s*,\s*\d+)*\]\s*)?(?:ответ\s*:\s*)?(?:\d{1,2}(?:\.\d{1,3})*\.\s+)?", "",
+                    answer, flags=re.IGNORECASE)
     pnums = [_numbers(p["text"]) for p in passages]
     allnums = set().union(*pnums) if pnums else set()
     out, unsupported, changes, start = [], [], 0, 0
+
+    mismatch: list[str] = []
+
+    def check_doc(span: str, cites: list[int]) -> None:
+        """«…в договоре поставки… [2]», а [2] — из договора подряда: модель перенесла условие на другой документ."""
+        m = re.search(r"договор\w*\s+([а-яё]{4,})", span.lower())
+        labels = [(passages[c - 1].get("doc_label") or "").lower() for c in cites if 1 <= c <= len(passages)]
+        if not m or not labels or not all(labels):
+            return
+        kind = m.group(1)[:6]
+        if kind in ("состав", "предус", "указан", "заключ", "действ", "являет") or any(kind in lab for lab in labels):
+            return
+        mismatch.append(f"«…{span.strip()[-80:]}» — источник: {passages[cites[0] - 1]['doc_label']}")
 
     def best_for(nums: set[str]) -> int | None:
         return next((i + 1 for i, ps in enumerate(pnums) if nums <= ps), None)
@@ -539,6 +555,7 @@ def verify(answer: str, passages: list[dict]) -> dict:
             new = [b] if b else valid
         if new != cites:
             changes += 1
+        check_doc(span, new)
         out.append(span.rstrip() + (" [" + ", ".join(map(str, new)) + "]" if new else ""))
         start = m.end()
 
@@ -552,10 +569,9 @@ def verify(answer: str, passages: list[dict]) -> dict:
         changes += 1
     out.append(tail)
     text = re.sub(r"^\s+", "", "".join(out))
-    # «Ответ: …», «7.1. Гарантийный срок…», «1. Поставщик…» — модель копирует нумерацию пунктов
-    text = re.sub(r"^(?:ответ\s*:\s*)?(?:\d{1,2}(?:\.\d{1,3})*\.\s+)?", "", text, flags=re.IGNORECASE)
     text = text[:1].upper() + text[1:]
-    return {"text": text, "unsupported": list(dict.fromkeys(unsupported)), "fixed_citations": changes}
+    return {"text": text, "unsupported": list(dict.fromkeys(unsupported)), "fixed_citations": changes,
+            "other_document": mismatch}
 
 
 def degenerate(answer: str, question: str) -> bool:

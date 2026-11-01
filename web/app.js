@@ -397,6 +397,7 @@ async function ask(question) {
           // ответ, сверенный с источниками: исправлены номера ссылок; числа, которых нет в документах, — предупреждение
           answer = ev.text; bubble.innerHTML = renderAnswer(answer, sources.length);
           if (ev.unsupported.length) bubble.insertAdjacentHTML("afterend", `<div class="verify-warn">⚠ Не найдено в документах: ${ev.unsupported.map(esc).join(", ")}. Проверьте по источникам.</div>`);
+          if (ev.other_document?.length) bubble.insertAdjacentHTML("afterend", `<div class="verify-warn">⚠ Возможно, условие взято из другого документа: ${ev.other_document.map(esc).join("; ")}</div>`);
         }
         else if (ev.type === "error") throw new Error(ev.error);
       }

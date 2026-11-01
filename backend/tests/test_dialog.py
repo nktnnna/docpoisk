@@ -212,3 +212,13 @@ def test_synonyms_expand_query():
     assert "цена" in expand("Сколько стоит строительство?")
     assert expand("Где находится объект?") == ""
     assert "подписи сторон" in expand("Кто подписал договор?")
+
+
+def test_verify_flags_condition_from_other_document():
+    from app.chat_service import verify
+
+    P = [{"text": "Цена 4 250 000 рублей", "doc_label": "Договор поставки № П-207 от 12.04.2024"},
+         {"text": "Цена 18 600 000 рублей, в том числе НДС 20 %", "doc_label": "Договор подряда № 15/2024 от 01.02.2024"}]
+    assert verify("Ставка НДС в договоре поставки составляет 20 % [2].", P)["other_document"]
+    assert verify("Ставка НДС по договору подряда — 20 % [2].", P)["other_document"] == []
+    assert verify("Цена договора составляет 4 250 000 рублей [1].", P)["other_document"] == []
