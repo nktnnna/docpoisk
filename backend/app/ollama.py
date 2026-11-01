@@ -30,7 +30,9 @@ async def chat_stream(messages: list[dict]) -> AsyncIterator[str]:
         "model": config.LLM_MODEL,
         "messages": messages,
         "stream": True,
-        "options": {"temperature": config.LLM_TEMPERATURE, "num_ctx": config.LLM_NUM_CTX},
+        # потолок длины: маленькая модель при temperature=0 иногда зацикливается и пишет до конца окна
+        "options": {"temperature": config.LLM_TEMPERATURE, "num_ctx": config.LLM_NUM_CTX,
+                    "num_predict": config.ANSWER_MAX_TOKENS},
     }
     async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
         async with client.stream("POST", f"{config.OLLAMA_URL}/api/chat", json=payload) as r:
@@ -50,13 +52,13 @@ async def chat_stream(messages: list[dict]) -> AsyncIterator[str]:
                     break
 
 
-async def chat(messages: list[dict], max_tokens: int = 200, fmt: str | None = None) -> str:
+async def chat(messages: list[dict], max_tokens: int = 200, fmt: str | None = None, temperature: float = 0) -> str:
     """Ответ целиком, без потока — для служебных запросов. fmt="json" — модель обязана вернуть JSON."""
     payload = {
         "model": config.LLM_MODEL,
         "messages": messages,
         "stream": False,
-        "options": {"temperature": 0, "num_ctx": config.LLM_NUM_CTX, "num_predict": max_tokens},
+        "options": {"temperature": temperature, "num_ctx": config.LLM_NUM_CTX, "num_predict": max_tokens},
     }
     if fmt:
         payload["format"] = fmt

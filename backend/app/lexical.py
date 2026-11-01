@@ -28,7 +28,7 @@ except ImportError:  # без стеммера — грубо обрезаем �
     def _stem(w: str) -> str:
         return w[:6]
 
-_TOKEN = re.compile(r"\d+(?:[.,]\d+)*|[a-zа-я]+")
+_TOKEN = re.compile(r"\d+(?:\.\d+)*|[a-zа-я]+")
 STOPWORDS = set("""
 а без более бы был была были было быть в вам вас весь во вот все всего всех вы где да даже для до его ее если
 есть еще же за здесь и из или им их к как ко когда кто ли либо мне может мы на над надо наш не него нее нет ни
@@ -40,8 +40,14 @@ STOPWORDS = set("""
 K1, B = 1.5, 0.75
 
 
+def norm_numbers(text: str) -> str:
+    """«18 600 000» → «18600000», «0,3» → «0.3» — чтобы число из вопроса совпадало с числом в тексте."""
+    text = re.sub(r"(?<=\d)[ \u00a0\u202f\n](?=\d{3}(?!\d))", "", text)   # \n — перенос строки внутри числа в PDF
+    return re.sub(r"(?<=\d),(?=\d)", ".", text)
+
+
 def tokenize(text: str) -> list[str]:
-    words = _TOKEN.findall(text.lower().replace("ё", "е"))
+    words = _TOKEN.findall(norm_numbers(text.lower().replace("ё", "е")))
     return [w if w[0].isdigit() else _stem(w) for w in words if w not in STOPWORDS and (len(w) > 1 or w.isdigit())]
 
 

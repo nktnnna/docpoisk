@@ -105,6 +105,7 @@ button { font: inherit; color: inherit; cursor: pointer; }
 .msg.bot .bubble.thinking { color: var(--muted); }
 .msg.bot .bubble.err { color: var(--warn); }
 .cite { display: inline-block; background: var(--accent-soft); color: var(--accent); border-radius: 5px; padding: 0 5px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.verify-warn { margin-top: 6px; font-size: 13px; color: var(--hi-fg); background: var(--hi-bg); border-radius: 8px; padding: 6px 10px; }
 .sources { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .sources summary { font-size: 13px; color: var(--muted); cursor: pointer; }
 .src { background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; font-size: 13px; margin-top: 6px; }

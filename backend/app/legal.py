@@ -179,9 +179,28 @@ def analyze_meta(text: str) -> dict:
     refs = contract_refs(text)
     if doc_type == "contract" and num:
         refs = [r for r in refs if r["num"] != norm_num(num)]
-    title = next((x for x in _title_lines(text, 3) if len(x) > 3), "")[:150]
+    # «Лист: График» — служебная строка Excel, а не заголовок
+    title = next((x for x in _title_lines(text, 4) if len(x) > 3 and not x.startswith("Лист:")), "")[:150]
     return {"type": doc_type, "type_name": TYPES[doc_type], "number": num, "date": date,
             "title": title, "parties": parties(text), "refs": refs}
+
+
+def doc_label(meta: dict) -> str:
+    """«Доп. соглашение № 1 от 20.05.2024 к договору № 15/2024» — как документ называть модели и людям."""
+    title = re.sub(r"^[#*\s]+", "", meta.get("title") or "").strip()
+    if title.isupper():   # «ДОГОВОР ПОСТАВКИ № П-207» → «Договор поставки № П-207» (номер не трогаем)
+        words = title.split()
+        title = " ".join(w.capitalize() if i == 0 else (w.lower() if w.isalpha() else w) for i, w in enumerate(words))
+    if meta["type"] in ("other", "contract") and title and (meta["type"] == "other" or "№" in title):
+        out = title                  # в заголовке договора есть вид: «Договор подряда № 15/2024»
+    else:
+        out = meta["type_name"] + (f" № {meta['number']}" if meta.get("number") else "")
+    if meta.get("date") and meta["type"] != "other" and ru_date(meta["date"]) not in out:
+        out += f" от {ru_date(meta['date'])}"
+    ref = next(iter(meta.get("refs") or []), None)
+    if ref and meta["type"] in ("amendment", "letter", "claim", "act", "protocol", "invoice", "consolidated"):
+        out += f" {'к договору' if meta['type'] in ('amendment', 'protocol') else 'по договору'} № {ref['num']}"
+    return out
 
 
 def build_links(metas: dict[str, dict], manual: dict) -> list[dict]:

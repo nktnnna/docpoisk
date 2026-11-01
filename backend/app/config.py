@@ -51,6 +51,7 @@ MIN_SCORE = _float("MIN_SCORE", 0.35)          # порог косинусной
 REL_SCORE_GAP = _float("REL_SCORE_GAP", 0.15)  # отсекать фрагменты хуже лучшего больше чем на столько
 CANDIDATES = _int("CANDIDATES", 20)           # сколько кандидатов брать из каждого вида поиска до объединения
 NEIGHBORS = _int("NEIGHBORS", 1)               # сколько соседних фрагментов до/после найденного добавлять
+NEIGHBOR_CHARS = _int("NEIGHBOR_CHARS", 400)   # …но только их край: ровно чтобы дочитать разрезанный пункт
 # Сколько символов документов максимум отдавать LLM. Вместе с историей диалога должно влезать
 # в LLM_NUM_CTX токенов (≈3 символа на токен), иначе Ollama молча обрежет начало — и инструкции.
 CONTEXT_CHARS = _int("CONTEXT_CHARS", 9000)
@@ -58,6 +59,7 @@ HISTORY_TURNS = _int("HISTORY_TURNS", 3)       # сколько прошлых �
 CONDENSE_QUESTION = os.getenv("CONDENSE_QUESTION", "1") not in ("0", "false", "no")  # уточнять вопрос по диалогу
 LLM_TEMPERATURE = _float("LLM_TEMPERATURE", 0.0)
 LLM_NUM_CTX = _int("LLM_NUM_CTX", 8192)
+ANSWER_MAX_TOKENS = _int("ANSWER_MAX_TOKENS", 700)   # предел длины ответа (≈ 2000 символов)
 
 STORAGE_DIR = os.getenv("STORAGE_DIR", os.path.join(DATA_DIR, "files"))  # копии загруженных файлов
 INBOX_DIR = os.getenv("INBOX_DIR", os.path.join(DATA_DIR, "inbox"))       # папка для массовой загрузки

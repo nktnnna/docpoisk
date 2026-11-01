@@ -393,6 +393,11 @@ async function ask(question) {
         if (ev.type === "query") { query = ev.text; bubble.textContent = `Ищу: «${query}»…`; }
         else if (ev.type === "sources") { sources = ev.sources; bubble.textContent = sources.length ? "Нашёл фрагменты, формулирую ответ…" : ""; }
         else if (ev.type === "token") { answer += ev.text; bubble.classList.remove("thinking"); bubble.innerHTML = renderAnswer(answer, sources.length); scrollDown(); }
+        else if (ev.type === "final") {
+          // ответ, сверенный с источниками: исправлены номера ссылок; числа, которых нет в документах, — предупреждение
+          answer = ev.text; bubble.innerHTML = renderAnswer(answer, sources.length);
+          if (ev.unsupported.length) bubble.insertAdjacentHTML("afterend", `<div class="verify-warn">⚠ Не найдено в документах: ${ev.unsupported.map(esc).join(", ")}. Проверьте по источникам.</div>`);
+        }
         else if (ev.type === "error") throw new Error(ev.error);
       }
     }

@@ -18,8 +18,8 @@ from pathlib import Path
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
-from . import auth, config, ollama, store
-from .chunking import chunk_pages, embed_text, headings
+from . import auth, config, legal, ollama, store
+from .chunking import chunk_pages, embed_text, headings, normalize
 from .parsing import SUPPORTED, extract_pages, unsupported_reason
 
 log = logging.getLogger("ingest")
@@ -54,6 +54,11 @@ async def _index(job_id: str, filename: str, data: bytes) -> None:
             "например, в ABBYY FineReader или через «Сохранить как PDF с текстом»."
         )
     chunks = chunk_pages(pages, config.CHUNK_SIZE, config.CHUNK_OVERLAP)
+    # реквизиты документа — в каждый фрагмент: модель должна видеть, что перед ней
+    # «Доп. соглашение № 1 от 20.05.2024 к договору № 15/2024», а не только имя файла
+    meta = await asyncio.to_thread(legal.analyze_meta, "\n".join(normalize(t) for _, t in pages))
+    doc = {"type": meta["type"], "label": legal.doc_label(meta), "number": meta.get("number"),
+           "ref": next((r["num"] for r in meta.get("refs") or []), None)}
     job.update(status="embedding", chunks=len(chunks), done=0)
 
     vectors: list[list[float]] = []
@@ -65,7 +70,7 @@ async def _index(job_id: str, filename: str, data: bytes) -> None:
     job["status"] = "saving"
     await store.ensure_collection(len(vectors[0]))
     await store.delete_doc(doc_id)  # повторная загрузка того же файла заменяет старую версию
-    await store.upsert(doc_id, filename, chunks, vectors, _now())
+    await store.upsert(doc_id, filename, chunks, vectors, _now(), doc)
 
     dest = Path(config.STORAGE_DIR) / doc_id
     dest.mkdir(parents=True, exist_ok=True)

@@ -40,16 +40,18 @@ async def ensure_collection(dim: int) -> None:
         await c.create_payload_index(config.COLLECTION, "doc_id", models.PayloadSchemaType.KEYWORD)
 
 
-# Версия индексации. 2 — эмбеддинги с именем документа и разделом. Старые документы работают,
-# но ищутся хуже; интерфейс предлагает их переиндексировать.
-INDEX_VERSION = 2
+# Версия индексации. 2 — эмбеддинги с именем документа и разделом; 3 — у каждого фрагмента
+# реквизиты документа (тип, номер, дата). Старые документы работают, но ищутся и понимаются хуже;
+# интерфейс предлагает их переиндексировать.
+INDEX_VERSION = 3
 
 
 def point_id(doc_id: str, chunk: int) -> str:
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"{doc_id}:{chunk}"))
 
 
-async def upsert(doc_id: str, filename: str, chunks, vectors, uploaded_at: str) -> None:
+async def upsert(doc_id: str, filename: str, chunks, vectors, uploaded_at: str, doc: dict | None = None) -> None:
+    doc = doc or {}
     points = [
         models.PointStruct(
             id=point_id(doc_id, ch.index),
@@ -62,6 +64,10 @@ async def upsert(doc_id: str, filename: str, chunks, vectors, uploaded_at: str) 
                 "section": ch.section,
                 "text": ch.text,
                 "uploaded_at": uploaded_at,
+                "doc_type": doc.get("type", ""),
+                "doc_label": doc.get("label", ""),
+                "doc_number": doc.get("number") or "",
+                "doc_ref": doc.get("ref") or "",       # номер договора, к которому относится документ
                 "v": INDEX_VERSION,
             },
         )
@@ -118,6 +124,15 @@ async def doc_chunks(doc_id: str) -> list[dict]:
         result.extend(p.payload for p in points)
         if offset is None:
             return sorted(result, key=lambda c: c["chunk"])
+
+
+async def get_vectors(keys: list[tuple[str, int]]) -> dict[tuple[str, int], list[float]]:
+    """Векторы фрагментов — чтобы оценить близость к вопросу и тех, что нашёл поиск по словам."""
+    if not keys or not await client().collection_exists(config.COLLECTION):
+        return {}
+    res = await client().retrieve(config.COLLECTION, ids=[point_id(d, c) for d, c in keys],
+                                  with_payload=["doc_id", "chunk"], with_vectors=True)
+    return {(p.payload["doc_id"], p.payload["chunk"]): p.vector for p in res}
 
 
 async def count() -> int:

@@ -5,3 +5,7 @@ __pycache__/
 .env
 data/
 !data/inbox/.gitkeep
+
+# результаты прогона сценариев qa/
+qa/corpus/
+qa/results*.json
